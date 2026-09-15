@@ -1,0 +1,33 @@
+# c1 门店层断崖(L2:单切片直降,但需下钻两层才能命中)
+#
+# 数据锚点(2026-05 → 2026-06,AttributionEngine 实测,非估计值):
+#   全量 gmv        13,692,893.29 → 10,824,508.20   -20.95%
+#   华东 gmv         5,319,716.89 →  3,710,485.01   -30.25%
+#   STORE_S0001 gmv  1,740,234.97 →    741,320.76   -57.40%
+#   contribute('gmv','store','store_id') 里 STORE_S0001 的贡献度
+#     = 0.3482(占全量变化)/ 0.6207(占华东变化)→ 两个口径都落在区间内
+#   干扰项:618 大促后全量自然回落(2026-06-01~06-18 促销日历内)
+#
+# contribution_range 取得较宽 [0.30, 0.75]:contribute 无 filters 参数(已知问题),
+# 「占全量变化」与「占华东变化」都是可辩护口径,区间必须同时容纳两者。
+id: c1_store_cliff
+tier: L2
+category: 零售
+question: "为什么 2026 年 6 月华东的 GMV 环比 5 月大幅下滑?"
+expected:
+  root_cause_slice:
+    dimension: store
+    level: store_id
+    key: STORE_S0001
+    label: 上海徐家汇旗舰店
+  mechanism: "上海徐家汇旗舰店自 2026-06 起断崖(-57.40%),其头部 SKU 下架导致客单价暴跌,是华东-30.25% 的主要来源"
+  contribution_range: [0.30, 0.75]
+  required_depth: store_id
+  must_not_claim: ["整体自然回落是唯一原因", "全部门店同步下滑"]
+distractors: ["618 大促后全量自然回落"]
+slice_occupancy:            # §5.10 约束 1:本 case 的影响集合
+  dimension: store
+  keys: [STORE_S0001]
+  window: [2026-06-01, 2026-06-30]
+overlap_with: []            # 与其它 case 的影响集合不相交
+note: "干扰项(618 自然回落)是全局量,与 c3 的时间窗叠加,已由 c3 侧声明(§5.10 约束 1 的例外)"

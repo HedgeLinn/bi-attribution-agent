@@ -1,0 +1,159 @@
+# BI 归因分析数据集 · 语义层(用户旅程:事件流 + 同期群)
+#
+# 这套数据存在的意义:把**同一个「有多少用户」的四种口径**摆在同一张地图上,并把
+# 「跨粒度」这件事变成必须先想清楚、否则一定算错的题。
+#   - 一行 = 一个事件(app_open / signup / pay),用户属性**冗余在事实行上**
+#   - active_users(活跃用户数)在实体间可加、**跨时间不可加**:把 6 个星期相加得到
+#     的是「人周」不是人数;active_users 只在**同一时间窗内**跨切片可比
+#   - dau(日活跃用户数)是**半可加**:窗口内取最后有数据日的值,不是逐日求和
+#   - reg_rate(注册转化率)是**跨人群比率**:分子是「注册的人」、分母是「访问的人」,
+#     两者不是同一批人 —— 丢两步算(先各自聚合再相除),不是逐行比率求平均
+#   - arpu(人均收入)是「分子 / 分母」形派生指标,支持**结构分解**(见 decompositions)
+#
+# 四个维度是**派生维度**(type: derived):层级字段直接住在事实表 events 上,引擎不 join。
+# 同期群(cohort)、分层(tier)、版本(version)、批次(batch)都是这个形态 —— 这正是
+# §5.5 指定的「用户级数据集」形态:同期群是注册日的派生,不是一张独立的维表。
+#
+# 口径(读数据前必须知道的,已写进 caveats 供 agent 看到):
+#   ① 活跃用户跨时间不可加 / DAU 半可加(两个同名表达式、两种执行语义)
+#   ② 注册转化率的分子分母是两批人(跨粒度比率)
+#   ③ signup_date 是**记录注册日**,线下渠道存在批次回填(记录日 ≠ 首次活跃日)
+#   ④ 金额一律整数「分」
+schema_version: "2.0"
+dataset: user-journey
+dataset_version: "1.0.0"
+
+fact_table: events
+date_field: day
+
+metrics:
+  # --- 事件计数(可加)--------------------------------------------------------
+  visits:
+    label: 访问次数
+    # 一次「访问」= 一条 app_open 事件(用户当天打开 App);同一用户一天多次打开也各记一次
+    expression: SUM(CASE WHEN event_type = 'app_open' THEN 1 ELSE 0 END)
+    type: additive
+    time_aggregation: sum
+    depends_on: [event_type]
+  registrations:
+    label: 注册数
+    expression: SUM(CASE WHEN event_type = 'signup' THEN 1 ELSE 0 END)
+    type: additive
+    time_aggregation: sum
+    depends_on: [event_type]
+  pay_orders:
+    label: 付费笔数
+    expression: SUM(CASE WHEN event_type = 'pay' THEN 1 ELSE 0 END)
+    type: additive
+    time_aggregation: sum
+    depends_on: [event_type]
+  revenue:
+    label: 收入
+    unit: 分
+    expression: SUM(amount)
+    type: additive
+    time_aggregation: sum
+    depends_on: [amount]
+
+  # --- 用户计数:同一段 SQL,两种口径 -----------------------------------------
+  active_users:
+    label: 活跃用户数
+    expression: COUNT(DISTINCT user_id)
+    type: additive
+    time_aggregation: sum
+    depends_on: [user_id]
+  dau:
+    label: 日活跃用户数
+    expression: COUNT(DISTINCT user_id)
+    type: semi_additive
+    time_aggregation: last      # 窗口内取**最后有数据日**的值(不是逐日求和)
+    depends_on: [user_id]
+
+  # --- 跨粒度比率 -------------------------------------------------------------
+  arpu:
+    label: 人均收入
+    unit: 分
+    expression: revenue / NULLIF(active_users, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [revenue, active_users]     # 顺序 = [分子, 分母],结构分解按此取数
+  reg_rate:
+    label: 注册转化率
+    expression: registrations / NULLIF(visits, 0)
+    type: ratio
+    computation: two_stage                  # ratio 类型必须显式声明
+    time_aggregation: sum
+    depends_on: [registrations, visits]     # 顺序 = [分子, 分母]
+
+# 分解声明(§4.2):factors 是**指标名**时走指标分解,structural 的 factors 是人为命名。
+decompositions:
+  # 结构分解:人均收入 = Σ(分层权重 × 分层人均)。权重 = 该分层活跃用户占比,
+  # 强度 = 该分层 revenue / active_users。回答「整体人均上升是**大家变值钱了**
+  # (自身效应)还是**低人均的人走了**（结构效应)」—— 这是 U4 的考点。
+  - target: arpu
+    kind: structural
+    entity_dimension: tier
+    factors: [user_mix, user_value]
+  # 比率分解:注册转化率 = 注册数 / 访问次数,拆成「分子效应」与「分母效应」
+  # (U2 的考点:分母没动、分子塌了 → 漏斗环节定位)。
+  - target: reg_rate
+    kind: ratio
+    factors: [registrations, visits]
+
+dimensions:
+  # --- 派生维度(字段在事实表上,不 join;必须在 user 之前声明,见下)------------
+  # 派生维度也要声明 key:结构分解的 entity_dimension 按「维度的 key」取分组字段,
+  # 缺 key 会生成 `GROUP BY o.` 这样的残句(SQL 解析直接报错)。
+  cohort:
+    label: 注册同期群
+    type: derived
+    key: signup_date
+    hierarchy: [signup_month, signup_date]
+  tier:
+    label: 用户分层
+    type: derived
+    key: tier_id
+    hierarchy: [tier_id]
+  version:
+    label: App 版本
+    type: derived
+    key: app_version
+    hierarchy: [app_version]
+  # --- 维表维度 ---------------------------------------------------------------
+  # channel 必须**声明在 batch 之前**:字段名到维度的映射是「先声明者得」,batch 的层级
+  # 也含 channel_id,若 batch 先声明,channel_id 会归属派生维度 batch(不 join),而
+  # 渠道维的展示名 channel_name 仍需 join —— 生成的 SQL 会引用未 join 的表(实测报
+  # Binder Error: Referenced table "d_channel" not found)。
+  channel:
+    label: 渠道
+    table: dim_channel
+    key: channel_id
+    name_column: channel_name
+    hierarchy: [channel_type, channel_id]
+  # batch 的层级含 channel_id:分析「哪个批次」之前先按渠道分组 —— U1 的陷阱面正是
+  # 「渠道维度看不出问题(该渠道别的批次还在长),只有钻到批次层才命中」。
+  batch:
+    label: 注册批次
+    type: derived
+    key: batch_id
+    hierarchy: [channel_id, batch_id]
+  # user 的 hierarchy 也含 signup_date:同期群这一派生维度**先声明**,所以 signup_date
+  # 归属 cohort(不 join);user 维度只提供 user_id 这一层,用于最后的个体核对。
+  user:
+    label: 用户
+    table: dim_user
+    key: user_id
+    hierarchy: [signup_date, user_id]
+  date:
+    label: 日期
+    table: dim_date
+    key: day
+    hierarchy: [year, month, day]
+
+caveats:
+  - "**「活跃用户数」跨时间不可加**:它在**切片之间**(渠道 / 分层 / 版本 / 批次 / 时段)可以直接相加,但在**时间上不可加** —— 把连续几周或几个月的活跃用户数相加,得到的是「人周 / 人月」而不是人数(同一个用户被重复计入)。要回答「这段时间有多少用户」,只能用**一个**时间窗取一次值;要比较两段时间,比较的是**两段各自的人数**,不是它们的和。"
+  - "**「日活跃用户数」是半可加指标**:跨实体可加、跨时间不可加,任意窗口的取值是窗口内**最后有数据日**的值(不是逐日求和、也不是窗口均值)。一个 14 天的窗口返回的是第 14 天的 DAU;想看逐日走势请把窗口缩到单日再逐日查询。把窗口内逐日 DAU 求和会得到数倍于真实水平的数字,那是口径错误,不是增长。"
+  - "**「注册转化率」的分子与分母不是同一批人**:分母访问次数可以是同一个人多次访问,分子注册数每人最多一次。比率必须在**聚合之后**相除(先分别把分子、分母聚合到同一粒度,再相除),不能把逐行的比率求平均 —— 那会得到「访问越少的人权重越大」的错数。同理,某个切片的转化率不可加:各渠道的转化率相加没有意义,汇总转化率要用汇总的分子 / 汇总的分母重算。"
+  - "**signup_date 是「记录注册日」,不是「首次活跃日」**:线下渠道存在**批次回填** —— 地推拉来的用户在真实注册若干天后才由批次上传补齐档案,其 signup_date 被写成**上传日**,而 dim_user.ingest_day 与事件的真实发生日(day)仍是原始值。判断某批用户的真实归属时,若「记录注册日」晚于「该用户最早事件日」或晚于「入库日」,该用户的同期群归属就不可信,必须回落到事件本身的日期。同期群的**人数**因此会随回填批次漂移,这是数据质量现象而非业务变化。"
+  - "**「没有行」不是 0**:某个切片在某天没有事件行,表示那天没人访问(或事件没采到),与「访问次数为 0」在聚合上的表现不同 —— SUM 得到 NULL、COUNT 得到 0。跨切片比较前先确认切片是否存在,缺失只能排除,不能补零。"
+  - "**金额一律整数「分」**:指标返回的 120000 就是 1,200.00 元。换算成元除以 100,别把分当成元(人均收入尤甚:它是「分 / 人」,看起来像个不大的数,实际单位是分)。"

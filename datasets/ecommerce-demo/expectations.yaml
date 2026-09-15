@@ -1,0 +1,158 @@
+# 数据集埋点回验(§5.10 约束 4:可回验)
+#
+# 每条期望 = 「造数时以为埋了什么」的可证伪声明,由 scripts/verify_dataset.py 用
+# AttributionEngine 公开方法独立反向检测 —— 不复制造数脚本的逻辑(否则「以为埋了
+# 其实没埋」永远发现不了)。
+#
+# 阈值口径:围绕实测值取 ±10 个百分点(不是精确值 —— 期望声明的是「坑的幅度」,
+# 数据重造后仍在同一量级即视为成立;精确值比对属于回归测试,不是埋点回验)。
+dataset_version: "1.0.0"      # 与 semantic.yaml / dataset.yaml 的版本对齐
+
+expectations:
+  - id: store_cliff
+    description: 上海徐家汇旗舰店 2026-06 GMV 断崖(实测 -57.40%,阈值带 [-68%, -47%])
+    check:
+      type: metric_change
+      metric: gmv
+      filters: {store_id: STORE_S0001}
+      base: [2026-05-01, 2026-05-31]
+      cmp: [2026-06-01, 2026-06-30]
+      direction: down
+      min_rate: 0.47
+      max_rate: 0.68
+
+  - id: sku_delist
+    description: 头部 SKU SKU_P0001 自 2026-06 起在门店内完全无销量(下架)
+    check:
+      type: slice_absent
+      metric: gmv
+      dimension: product
+      level: product_id
+      key: SKU_P0001
+      filters: {store_id: STORE_S0001}
+      window: [2026-06-01, 2026-06-30]
+
+  - id: promo_noise
+    description: 2026-06 下旬 vs 5 月全量 GMV 大幅下降(实测 -67.87%,阈值带 [-78%, -58%];其中含 12 天 vs 31 天的天数口径差,日均口径仅 -17.01%)
+    check:
+      type: metric_change
+      metric: gmv
+      base: [2026-05-01, 2026-05-31]
+      cmp: [2026-06-19, 2026-06-30]
+      direction: down
+      min_rate: 0.58
+      max_rate: 0.78
+
+  # --- §5.3 场景埋点 E1/E2/E4/E5/E6 的回验 -------------------------------------
+  # 每个坑一条「主语句」+ 一条「交叉语句」:主语句证明坑的幅度,交叉语句证明
+  # 「另一个指标没动」——这是 E1/E2 纯量 / 纯价、E4 量价反向、E6 隐性价降的
+  # 分界线,单看 GMV 一条会漏掉「量价是否解耦」。
+
+  - id: pure_volume_store_drop
+    description: 北京国贸旗舰店 2025-07 GMV 环比 6 月腰斩(实测 -48.22%,阈值带 [-58%, -38%])
+    check:
+      type: metric_change
+      metric: gmv
+      filters: {store_id: STORE_S0002}
+      base: [2025-06-01, 2025-06-30]
+      cmp: [2025-07-01, 2025-07-31]
+      direction: down
+      min_rate: 0.38
+      max_rate: 0.58
+
+  - id: pure_volume_price_flat
+    description: 同店同期客单价几乎不动(实测 -3.93%,阈值带 [0%, 15%])——量跌价稳,是纯量效应
+    check:
+      type: metric_change
+      metric: aov
+      filters: {store_id: STORE_S0002}
+      base: [2025-06-01, 2025-06-30]
+      cmp: [2025-07-01, 2025-07-31]
+      max_rate: 0.15
+
+  - id: pure_price_store_drop
+    description: 广州天河旗舰店 2025-07 GMV 环比 6 月 -24.74%(阈值带 [-35%, -15%])
+    check:
+      type: metric_change
+      metric: gmv
+      filters: {store_id: STORE_S0003}
+      base: [2025-06-01, 2025-06-30]
+      cmp: [2025-07-01, 2025-07-31]
+      direction: down
+      min_rate: 0.15
+      max_rate: 0.35
+
+  - id: pure_price_orders_flat
+    description: 同店同期订单数几乎不动(实测 -0.27%,阈值带 [0%, 10%])——价跌量稳,是纯价效应
+    check:
+      type: metric_change
+      metric: orders_count
+      filters: {store_id: STORE_S0003}
+      base: [2025-06-01, 2025-06-30]
+      cmp: [2025-07-01, 2025-07-31]
+      max_rate: 0.10
+
+  - id: volume_price_reversal_orders_up
+    description: 成都春熙路旗舰店 2025-08 订单数环比 7 月 +52.66%(阈值带 [+42%, +63%])
+    check:
+      type: metric_change
+      metric: orders_count
+      filters: {store_id: STORE_S0004}
+      base: [2025-07-01, 2025-07-31]
+      cmp: [2025-08-01, 2025-08-31]
+      direction: up
+      min_rate: 0.42
+      max_rate: 0.63
+
+  - id: volume_price_reversal_gmv_flat
+    description: 同店同期 GMV 几乎持平(实测 +0.77%,阈值带 [0%, 15%])——量涨价跌互相抵消
+    check:
+      type: metric_change
+      metric: gmv
+      filters: {store_id: STORE_S0004}
+      base: [2025-07-01, 2025-07-31]
+      cmp: [2025-08-01, 2025-08-31]
+      max_rate: 0.15
+
+  - id: store_mix_shift_new_store
+    description: 合肥政务区中心店(STORE_S0451)2025-03 不存在、2025-04 出现(新店跳变)
+    check:
+      type: appeared
+      metric: gmv
+      filters: {store_id: STORE_S0451}
+      base: [2025-03-01, 2025-03-31]
+      window: [2025-04-01, 2025-04-30]
+
+  - id: store_mix_shift_city_up
+    description: 合肥 2025-04 GMV 环比 3 月 +25.89%(阈值带 [+15%, +35%]),增量 90.08% 来自上述新店
+    check:
+      type: metric_change
+      metric: gmv
+      filters: {city: 合肥}
+      base: [2025-03-01, 2025-03-31]
+      cmp: [2025-04-01, 2025-04-30]
+      direction: up
+      min_rate: 0.15
+      max_rate: 0.35
+
+  - id: hidden_discount_rate_up
+    description: 武汉江汉路旗舰店 2025-08 优惠率环比翻倍(实测 +81.6%,阈值带 [+70%, +95%])
+    check:
+      type: metric_change
+      metric: discount_rate
+      filters: {store_id: STORE_S0005}
+      base: [2025-07-01, 2025-07-31]
+      cmp: [2025-08-01, 2025-08-31]
+      direction: up
+      min_rate: 0.70
+      max_rate: 0.95
+
+  - id: hidden_discount_gmv_flat
+    description: 同店同期 GMV 几乎不动(实测 +2.34%,阈值带 [0%, 10%])——GMV 口径看不见优惠率翻倍
+    check:
+      type: metric_change
+      metric: gmv
+      filters: {store_id: STORE_S0005}
+      base: [2025-07-01, 2025-07-31]
+      cmp: [2025-08-01, 2025-08-31]
+      max_rate: 0.10

@@ -1,0 +1,101 @@
+# BI 归因分析示例数据 · 语义层(SaaS 订阅收入)
+#
+# 这套数据存在的意义:用最小成本验证 schema v2 的两个新表达能力——
+#   ① **半可加指标**(mrr:跨实体可加、跨时间不可加,time_aggregation: last)
+#   ② **加法分解**(decompositions.kind: additive,mrr = Σ 四类变动)
+#
+# 数据形态(两张事实表;§5.6):
+#   - subscriptions(默认事实表):期快照,一账户一天一行,mrr_amount = 该账户
+#     **截至当日**的 MRR 水平(整数「分」)。账户流失后不再出行——没有行 = 水平 0。
+#   - mrr_movements:变动明细,四类 movement_type + 带符号 amount(降配 / 流失为负)。
+#   两张表严格对账:任意一天(或任意切片)的**快照水平和**恒等于「该日及以前的
+#   全部变动金额之和」,逐笔整数相加,差恒为 0(由 data 生成脚本构造性保证)。
+#
+# 口径(读数据前必须知道的三件事,已写进 caveats 供 agent 看到):
+#   ① 半可加:窗口内取**最后有数据日**的值,不是逐日求和(求和是 30 倍量级的静默错误)。
+#   ② 加法分解的恒等式只在**同一原点**的两段窗口上成立(见 caveats 第 2 条)。
+#   ③ 快照里「没有行」表示水平为 0,不是缺失值。
+#
+# 刻意不声明 time.calendar:任何日历条目落到 case 窗口都会把 is_expected 置真、
+# 抑制异常信号,让 case 变得不可判(日历能力由 ecommerce-demo 负责演示)。
+#
+# 埋点(四组,受影响账户集合两两不交;数值见各自 case 的注释块)
+#   s1 旗舰版 ACC_F001 2026-06-15 流失(37 席 @¥999)
+#   s2 专业版 ACC_P001 2026-03-08 一次性扩容 +118 席,4 月无后续(增长熄火)
+#   s3 基础版 ACC_B001 2026-05-28 降配 -450 席 + 「试用潮」客群摆锤
+#      (36 户 4 月初签约、**5 月中旬到期流失**——末日口径下切片变化为 0,
+#       逐日求和口径下「掉」¥195,247,是「MRR 跨期求和」这条静默错误的显形装置)
+#   s4 企业版 ACC_E001 2026-02-20 流失(24 席 @¥1999)+ 2 月企业版零新签
+
+schema_version: "2.0"
+dataset: saas-mrr
+dataset_version: "1.0.0"
+
+fact_table: subscriptions
+date_field: date_id
+
+metrics:
+  mrr:
+    label: 月度经常性收入
+    unit: 分
+    expression: SUM(mrr_amount)
+    type: semi_additive           # 跨实体可加、跨时间不可加
+    time_aggregation: last        # 窗口内取最后有数据日的值(不是求和)
+    depends_on: [mrr_amount]
+  new_mrr:
+    label: 新签收入
+    unit: 分
+    expression: SUM(CASE WHEN movement_type = 'new_biz' THEN amount ELSE 0 END)
+    type: additive
+    time_aggregation: sum
+    source: mrr_movements         # 多事实表:本指标取自变动明细表
+    depends_on: [movement_type, amount]
+  expansion_mrr:
+    label: 扩张收入
+    unit: 分
+    expression: SUM(CASE WHEN movement_type = 'expansion' THEN amount ELSE 0 END)
+    type: additive
+    time_aggregation: sum
+    source: mrr_movements
+    depends_on: [movement_type, amount]
+  contraction_mrr:
+    label: 降配损失
+    unit: 分
+    expression: SUM(CASE WHEN movement_type = 'contraction' THEN amount ELSE 0 END)
+    type: additive
+    time_aggregation: sum
+    source: mrr_movements
+    depends_on: [movement_type, amount]
+  churn_mrr:
+    label: 流失损失
+    unit: 分
+    expression: SUM(CASE WHEN movement_type = 'churn' THEN amount ELSE 0 END)
+    type: additive
+    time_aggregation: sum
+    source: mrr_movements
+    depends_on: [movement_type, amount]
+
+# 加法分解:mrr 的水平 = Σ 四类变动的累计流(§4.2 的 additive 恒等式 V = Σ factors)
+decompositions:
+  - target: mrr
+    kind: additive
+    factors: [new_mrr, expansion_mrr, contraction_mrr, churn_mrr]
+
+dimensions:
+  account:
+    label: 账户
+    table: dim_account
+    key: account_id
+    name_column: account_name
+    hierarchy: [plan, account_id]      # 先按套餐分组,再下钻到账户
+  date:
+    label: 日期
+    table: dim_date
+    key: date_id
+    hierarchy: [year, month, date_id]
+
+caveats:
+  - "「月度经常性收入」是半可加指标:它在**实体之间**可加(各账户 / 各套餐的月度经常性收入可以直接相加),但在**时间上不可加**——任意时间窗的取值是窗口内最后有数据日的水平,不是逐日或逐月的累计。把几个月相加会得到数倍于真实水平的数字,那是口径错误,不是业务增长。"
+  - "加法分解的恒等式(mrr = 新签收入 + 扩张收入 + 降配损失 + 流失损失)**只在两段窗口起点相同、且起点前一日水平为 0 时成立**。本数据集 2025-07-01 起才有数据,故分解必须写成「2025-07-01 ~ 基期月末」对「2025-07-01 ~ 对比期月末」的桥式调用;直接拿两个不相交的月份做分解会不满足恒等式而报错。"
+  - "快照表里「某账户某天没有行」表示该账户当天的水平为 0(尚未签约或已流失),不是缺失值;同理,某窗口内一条变动都没有,表示这段时间没有任何这类变动(金额为 0),不是数据没采到。"
+  - "本数据集的金额一律是**整数「分」**(元 × 100):指标返回的 19527300 就是 195,273.00 元。用整数分是为了让「快照水平 = 累计变动」这条恒等式逐笔精确成立(不碰浮点误差);换算成元请除以 100,别把分当成元。"

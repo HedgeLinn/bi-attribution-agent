@@ -1,0 +1,199 @@
+# 数据集埋点回验(§5.10 约束 4:可回验)
+#
+# 每条期望 = 「造数时以为埋了什么」的可证伪声明,由 scripts/verify_dataset.py 用
+# AttributionEngine 公开方法独立反向检测 —— 不复制造数脚本的逻辑(否则「以为埋了
+# 其实没埋」永远发现不了)。
+#
+# 阈值口径:围绕实测值取 ±10 个百分点(不是精确值 —— 期望声明的是「坑的幅度」,
+# 数据重造后仍在同一量级即视为成立;精确值比对属于回归测试,不是埋点回验)。
+# 每条 description 里的数字都是**实测值**;下面每条注释给出该值在哪个口径上成立。
+#
+# 两处刻意的「倒挂窗口」(s3_reconcile / s4_reconcile):metric_change 的基期不能为 0,
+# 而「这条流以前没有、现在出现了」的埋点(流失 / 降配)在正向窗口上基期恰好是 0 ——
+# 于是把两个窗口对调,用变化率 −99.x% 表达「这笔流量占了这段时期的全部」。
+# 冻结 schema 只有 metric_change / slice_absent 两种检查,这是能表达「快照水平降幅 ↔
+# 变动流水」对账的唯一形状;两张表给出同一个整数(精确相等)由 tests/test_saas_dataset.py
+# 直接断言。
+dataset_version: "1.0.0"      # 与 semantic.yaml / dataset.yaml 的版本对齐
+
+expectations:
+  # --- s1 大客户流失(2026-05 → 2026-06)------------------------------------
+  - id: s1_flagship_level_cliff
+    description: 旗舰版末日水平 2026-06 断崖(实测 -50.68%,阈值带 [-61%, -41%])
+    check:
+      type: metric_change
+      metric: mrr
+      filters: {plan: 旗舰版}
+      base: [2026-05-01, 2026-05-31]
+      cmp: [2026-06-01, 2026-06-30]
+      direction: down
+      min_rate: 0.41
+      max_rate: 0.61
+
+  - id: s1_churn_flow_escalates
+    description: 全量流失流 5 → 6 月翻两番(实测 +199.84%,阈值带 [+190%, +210%];
+      5 月 -13,455 → 6 月 -40,343,其中 ACC_F001 一家 -36,963 占 91.62%)
+    check:
+      type: metric_change
+      metric: churn_mrr
+      filters: {}
+      base: [2026-05-01, 2026-05-31]
+      cmp: [2026-06-01, 2026-06-30]
+      direction: up
+      min_rate: 1.90
+      max_rate: 2.10
+
+  - id: s1_flagship_absent_after_churn
+    description: ACC_F001 自 2026-06-15(流失日)起在快照中不再被观测到(水平归零)
+    check:
+      type: slice_absent
+      metric: mrr
+      dimension: account
+      level: account_id
+      key: ACC_F001
+      filters: {}
+      window: [2026-06-15, 2026-06-30]
+
+  - id: s1_other_plans_flat
+    description: 对照:专业版同期几乎不动(实测 -0.77%,阈值带 [0%, 5%]),
+      证明 6 月下滑不是全站性的(干扰面很窄)
+    check:
+      type: metric_change
+      metric: mrr
+      filters: {plan: 专业版}
+      base: [2026-05-01, 2026-05-31]
+      cmp: [2026-06-01, 2026-06-30]
+      direction: down
+      min_rate: 0.0
+      max_rate: 0.05
+
+  # --- s2 扩张熄火(2026-03 → 2026-04,专业版)------------------------------
+  - id: s2_march_surge
+    description: 专业版 3 月末日水平较 2 月翻倍(实测 +100.82%,阈值带 [+90%, +110%];
+      36,478 → 73,255,来自 ACC_P001 3 月 8 日的一次性扩容)
+    check:
+      type: metric_change
+      metric: mrr
+      filters: {plan: 专业版}
+      base: [2026-02-28, 2026-02-28]
+      cmp: [2026-03-31, 2026-03-31]
+      direction: up
+      min_rate: 0.90
+      max_rate: 1.10
+
+  - id: s2_april_stall
+    description: 专业版 4 月末日水平只增 4.90%(实测;阈值带 [0%, 15%]),
+      增量从 +36,777 塌到 +3,588 —— 没有下滑,是增长熄火
+    check:
+      type: metric_change
+      metric: mrr
+      filters: {plan: 专业版}
+      base: [2026-03-31, 2026-03-31]
+      cmp: [2026-04-30, 2026-04-30]
+      direction: up
+      min_rate: 0.0
+      max_rate: 0.15
+
+  - id: s2_expansion_stops
+    description: 全量扩张流 4 月归零(实测 -100.00%:3 月 +37,076 → 4 月 0)
+    check:
+      type: metric_change
+      metric: expansion_mrr
+      filters: {}
+      base: [2026-03-01, 2026-03-31]
+      cmp: [2026-04-01, 2026-04-30]
+      direction: down
+      min_rate: 0.90
+      max_rate: 1.00
+
+  - id: s2_account_no_second_expansion
+    description: ACC_P001 在 2026-04 没有任何新扩张(3 月那笔 +¥35,282 没有第二次)
+    check:
+      type: slice_absent
+      metric: expansion_mrr
+      dimension: account
+      level: account_id
+      key: ACC_P001
+      filters: {}
+      window: [2026-04-01, 2026-04-30]
+
+  # --- s3 跨期求和陷阱(2026-04 → 2026-05)----------------------------------
+  - id: s3_basic_level_cliff
+    description: 基础版末日水平 2026-05 断崖(实测 -72.70%,阈值带 [-83%, -63%];
+      61,281 → 16,731,= ACC_B001 一家的 -¥44,550)
+    check:
+      type: metric_change
+      metric: mrr
+      filters: {plan: 基础版}
+      base: [2026-04-01, 2026-04-30]
+      cmp: [2026-05-01, 2026-05-31]
+      direction: down
+      min_rate: 0.63
+      max_rate: 0.83
+
+  - id: s3_reconcile_contraction_flow
+    description: 对账(变动侧,窗口倒挂):5 月基础版降配流 -¥44,847 占 4~5 月全部的
+      99.56%(实测 -0.9956,阈值带 [-1.00, -0.90])—— 与快照侧基础版水平降幅
+      -¥44,550(其中 ACC_B001 一家 -¥44,550)同一量级,两张表对同一事件给出同一笔钱
+    check:
+      type: metric_change
+      metric: contraction_mrr
+      filters: {plan: 基础版}
+      base: [2026-05-01, 2026-05-31]
+      cmp: [2026-04-01, 2026-04-30]
+      direction: down
+      min_rate: 0.90
+      max_rate: 1.00
+
+  # --- s4 流失 + 新签放缓并存(2026-01 → 2026-02)---------------------------
+  - id: s4_enterprise_level_cliff
+    description: 企业版末日水平 2026-02 断崖(实测 -66.67%,阈值带 [-77%, -57%];
+      71,964 → 23,988,= ACC_E001 一家的 -¥47,976)
+    check:
+      type: metric_change
+      metric: mrr
+      filters: {plan: 企业版}
+      base: [2026-01-01, 2026-01-31]
+      cmp: [2026-02-01, 2026-02-28]
+      direction: down
+      min_rate: 0.57
+      max_rate: 0.77
+
+  - id: s4_reconcile_churn_flow
+    description: 对账(变动侧,窗口倒挂):2 月全量流失流 -¥47,976 占 1~2 月全部的
+      98.75%(实测 -0.9875,阈值带 [-1.00, -0.89];1 月只有 -¥598)—— 与快照侧企业版
+      水平降幅 -¥47,976 逐分相等,是铁律一在真实数据上的样子
+    check:
+      type: metric_change
+      metric: churn_mrr
+      filters: {}
+      base: [2026-02-01, 2026-02-28]
+      cmp: [2026-01-01, 2026-01-31]
+      direction: down
+      min_rate: 0.89
+      max_rate: 1.00
+
+  - id: s4_account_gone
+    description: ACC_E001 自 2026-02-20(流失日)起在快照中不再被观测到(水平归零);
+      窗口取到 6 月底,确认不是「暂时没采到」
+    check:
+      type: slice_absent
+      metric: mrr
+      dimension: account
+      level: account_id
+      key: ACC_E001
+      filters: {}
+      window: [2026-03-01, 2026-06-30]
+
+  - id: s4_other_plans_up
+    description: 对照:专业版同期还在涨(实测 +5.17%,阈值带 [0%, 15%]),
+      证明 2 月下滑集中在企业版(干扰项「新签放缓」是全站口径,不解释企业版的断崖)
+    check:
+      type: metric_change
+      metric: mrr
+      filters: {plan: 专业版}
+      base: [2026-01-01, 2026-01-31]
+      cmp: [2026-02-01, 2026-02-28]
+      direction: up
+      min_rate: 0.0
+      max_rate: 0.15

@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BI 归因分析 agent · 前端镜像原型</title>
+<style>
+/* ============================================================
+   Design Token(与 app.py 的 _GLOBAL_CSS 一致,便于 1:1 回写)
+   三档字号密度通过 body[data-density] 切换
+   ============================================================ */
+:root {
+  --c-primary: #4F46E5;
+  --c-primary-soft: #EEF2FF;
+  --c-bg: #FFFFFF;
+  --c-bg-subtle: #F8FAFC;
+  --c-surface: #F1F5F9;
+  --c-border: #E2E8F0;
+  --c-text: #0F172A;
+  --c-text-muted: #64748B;
+  --c-success: #16A34A;
+  --c-info: #2563EB;
+}
+
+/* 三档密度:正文基准字号 */
+body[data-density="compact"]  { --fs-base: 0.8125rem; --fs-h1: 1.125rem; --fs-table: 0.75rem; --fs-side: 0.75rem; }
+body[data-density="standard"] { --fs-base: 0.875rem;  --fs-h1: 1.25rem;  --fs-table: 0.8125rem; --fs-side: 0.8125rem; }
+body[data-density="relaxed"]  { --fs-base: 0.9375rem; --fs-h1: 1.375rem; --fs-table: 0.875rem; --fs-side: 0.875rem; }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--c-text);
+  background: var(--c-bg);
+  -webkit-font-smoothing: antialiased;
+  font-size: var(--fs-base);
+  line-height: 1.6;
+}
+
+/* ---------- 顶部浮动工具条(仅原型用,回写时删除) ---------- */
+#toolbar {
+  position: fixed;
+  top: 0; left: 0; right: 0; z-index: 99;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  background: #111827;
+  color: #E5E7EB;
+  font-size: 13px;
+}
+#toolbar .brand { font-weight: 600; margin-right: auto; color: #fff; }
+#toolbar .hint { color: #9CA3AF; font-size: 12px; }
+#toolbar .seg { display: flex; border: 1px solid #374151; border-radius: 7px; overflow: hidden; }
+#toolbar .seg button {
+  border: none; background: transparent; color: #D1D5DB;
+  padding: 5px 14px; cursor: pointer; font-size: 13px; transition: all .15s;
+}
+#toolbar .seg button.active { background: var(--c-primary); color: #fff; }
+
+/* ---------- 布局 ---------- */
+.layout { display: flex; padding-top: 44px; min-height: 100vh; }
+
+/* ---------- 侧边栏 ---------- */
+aside {
+  width: 280px; flex: 0 0 280px;
+  background: var(--c-bg-subtle);
+  border-right: 1px solid var(--c-border);
+  padding: 16px 14px;
+  font-size: var(--fs-side);
+  overflow-y: auto;
+}
+aside .side-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+aside .side-head b { font-size: var(--fs-side); color: var(--c-text); }
+aside .btn-new {
+  width: 30px; height: 26px; line-height: 24px; text-align: center;
+  background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 6px;
+  color: var(--c-text-muted); cursor: pointer; font-size: 16px;
+}
+aside .sess {
+  display: block; width: 100%; text-align: left;
+  padding: 7px 10px; margin-bottom: 4px;
+  background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 7px;
+  color: var(--c-text); cursor: pointer; font-size: var(--fs-side);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+aside .sess.active { border-color: var(--c-primary); color: var(--c-primary); font-weight: 600; background: #fff; }
+aside .sess:hover { border-color: #C7D2FE; }
+aside .muted { color: var(--c-text-muted); font-size: calc(var(--fs-side) - 1px); }
+aside hr { border: none; border-top: 1px solid var(--c-border); margin: 16px 0; }
+aside .sec-title { font-size: var(--fs-side); font-weight: 600; margin-bottom: 6px; }
+
+/* 语义层折叠面板 */
+aside .expander { border: 1px solid var(--c-border); border-radius: 7px; background: var(--c-bg); }
+aside .expander summary {
+  padding: 7px 10px; cursor: pointer; list-style: none;
+  color: var(--c-text-muted); font-size: var(--fs-side);
+}
+aside .expander .body { padding: 4px 10px 10px; }
+aside .fact { color: var(--c-text-muted); font-size: calc(var(--fs-side) - 1px); margin-bottom: 8px; }
+aside .group { font-weight: 600; font-size: var(--fs-side); margin: 8px 0 3px; }
+aside .kv { font-size: calc(var(--fs-side) - 1px); color: #334155; line-height: 1.55; padding-left: 2px; }
+aside .kv code {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: calc(var(--fs-side) - 1px);
+  background: var(--c-surface); border-radius: 4px; padding: 0 4px;
+}
+aside .tag { font-size: calc(var(--fs-side) - 2px); color: var(--c-text-muted); }
+
+/* 能力场景清单 */
+aside .cap-item {
+  font-size: calc(var(--fs-side) - 1px);
+  color: #334155; line-height: 1.6;
+  margin-bottom: 3px; padding-left: 2px;
+}
+
+/* 指标业务分层小标题 */
+aside .tier {
+  font-size: calc(var(--fs-side) - 1px);
+  font-weight: 600;
+  color: var(--c-primary);
+  margin: 7px 0 2px;
+}
+
+/* 侧边栏操作按钮 */
+aside .op {
+  display: block; width: 100%; text-align: left;
+  padding: 7px 10px; margin-bottom: 6px;
+  background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 7px;
+  color: var(--c-text); cursor: pointer; font-size: var(--fs-side);
+}
+
+/* ---------- 主内容区 ---------- */
+main { flex: 1; max-width: 960px; margin: 0 auto; padding: 20px 24px 60px; }
+main h1 { font-size: var(--fs-h1); font-weight: 700; letter-spacing: -0.01em; margin-bottom: 4px; }
+main .subtitle { color: var(--c-text-muted); font-size: var(--fs-base); margin-bottom: 20px; }
+
+/* ---------- 聊天气泡 ---------- */
+.thread { display: flex; flex-direction: column; gap: 10px; }
+.msg { max-width: 94%; }
+.msg.user { align-self: flex-end; max-width: 82%; }
+.msg.user .bubble {
+  background: var(--c-primary); color: #fff;
+  border-radius: 10px 10px 3px 10px;
+  padding: 9px 14px;
+  font-size: var(--fs-base);
+}
+.msg.assistant { align-self: flex-start; }
+.msg.assistant .bubble {
+  background: var(--c-bg); border: 1px solid var(--c-border);
+  border-radius: 10px 10px 10px 3px;
+  padding: 12px 16px;
+  font-size: var(--fs-base);
+}
+.msg .meta { font-size: calc(var(--fs-base) - 2px); color: var(--c-text-muted); margin-top: 5px; }
+
+/* assistant 内部 markdown 元素 */
+.bubble p { font-size: var(--fs-base); margin-bottom: 8px; }
+.bubble p:last-child { margin-bottom: 0; }
+.bubble strong { font-weight: 600; }
+
+/* 结论块 */
+.conclusion {
+  background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px;
+  padding: 10px 14px; margin: 10px 0;
+  color: #14532D; font-size: var(--fs-base);
+}
+.conclusion b { color: #166534; }
+.evidence { margin: 10px 0; }
+.evidence .ev-title { font-weight: 600; margin-bottom: 5px; font-size: var(--fs-base); }
+.evidence li { margin-left: 18px; margin-bottom: 4px; font-size: var(--fs-base); }
+.suggestion {
+  background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 8px;
+  padding: 10px 14px; margin: 10px 0;
+  color: #1E3A8A; font-size: var(--fs-base);
+}
+
+/* ---------- 表格 ---------- */
+.bubble table {
+  border-collapse: collapse; width: 100%; margin: 10px 0;
+  font-size: var(--fs-table);
+}
+.bubble table th {
+  background: var(--c-primary-soft); font-weight: 600; text-align: left;
+  padding: 6px 10px; border-bottom: 1px solid var(--c-border);
+}
+.bubble table td { padding: 5px 10px; border-bottom: 1px solid var(--c-border); }
+.bubble table tr:nth-child(even) td { background: #FAFBFC; }
+
+/* ---------- 工具过程日志(模拟 st.status) ---------- */
+.status {
+  background: var(--c-surface); border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 10px;
+  font-size: calc(var(--fs-base) - 1px);
+}
+.status .st-head { font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.status .st-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-success); }
+.status .step { margin: 6px 0; }
+.status .step .who { color: var(--c-primary); font-weight: 600; }
+.status code {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: calc(var(--fs-base) - 2px);
+  background: #E2E8F0; border-radius: 4px; padding: 0 4px;
+}
+
+/* ---------- 行内代码 ---------- */
+.bubble code {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: calc(var(--fs-base) - 1px);
+  background: var(--c-surface); border-radius: 4px; padding: 1px 5px;
+}
+
+/* ---------- 输入框示意 ---------- */
+.chat-bar {
+  margin-top: 24px;
+  border: 1px solid var(--c-border); border-radius: 10px;
+  padding: 12px 16px; color: #94A3B8; font-size: var(--fs-base);
+  background: #fff;
+}
+</style>
+</head>
+<body data-density="standard">
+
+<!-- 原型专用工具条:切换字号密度(回写 app.py 时删除) -->
+<div id="toolbar">
+  <span class="brand">前端镜像原型</span>
+  <span class="hint">字号密度预览 · 商定后按此档回写 app.py</span>
+  <div class="seg" id="seg">
+    <button data-d="compact">紧凑</button>
+    <button data-d="standard" class="active">标准</button>
+    <button data-d="relaxed">宽松</button>
+  </div>
+</div>
+
+<div class="layout">
+
+  <!-- ================= 侧边栏 ================= -->
+  <aside>
+    <div class="side-head">
+      <b>历史对话</b>
+      <span class="btn-new" title="新建对话">＋</span>
+    </div>
+
+    <button class="sess active">● 请你帮我查询各个区域的销售额</button>
+    <button class="sess">西南为什么销售额这么低</button>
+
+    <hr>
+
+    <div class="sec-title">语义层</div>
+    <details class="expander" open>
+      <summary>📐 数据能力与语义层</summary>
+      <div class="body">
+        <div class="fact">事实表 <code>orders</code> · 时间字段 <code>date_id</code></div>
+
+        <div class="group">能做什么</div>
+        <div class="cap-item">🔎 查数汇总 —— 按区域/品类/渠道等维度查任意指标</div>
+        <div class="cap-item">⚠️ 异常检测 —— 对比两段时间，判断指标是否显著变化</div>
+        <div class="cap-item">🧭 根因下钻 —— 区域→城市→门店逐层定位“为什么变”</div>
+        <div class="cap-item">🩺 诊断对比 —— 区分是量掉了 / 价掉了 / 还是退款暴涨</div>
+
+        <div class="group">指标</div>
+
+        <div class="tier">🎯 观察</div>
+        <div class="kv"><code>gmv</code> GMV · <code>SUM(amount)</code></div>
+
+        <div class="tier">🔍 拆解</div>
+        <div class="kv"><code>orders_count</code> 订单数 · <code>COUNT(DISTINCT order_id)</code></div>
+        <div class="kv"><code>aov</code> 客单价 · <code>gmv / orders_count</code></div>
+        <div class="kv"><code>sales_qty</code> 销量 · <code>SUM(quantity)</code></div>
+
+        <div class="tier">🩺 诊断</div>
+        <div class="kv"><code>refund_rate</code> 退款率 · <code>SUM(refund) / gmv</code></div>
+        <div class="kv"><code>discount_rate</code> 优惠率 · <code>SUM(discount) / gmv</code></div>
+
+        <div class="group">维度 · 下钻路径</div>
+        <div class="kv"><code>store</code> 门店 <span class="tag">区域 → 城市 → 门店</span></div>
+        <div class="kv"><code>product</code> 商品 <span class="tag">品类 → 子类 → 商品</span></div>
+        <div class="kv"><code>channel</code> 渠道 <span class="tag">渠道</span></div>
+        <div class="kv"><code>date</code> 日期 <span class="tag">年 → 月 → 日</span></div>
+      </div>
+    </details>
+
+    <hr>
+
+    <button class="op">🧹 清空当前对话</button>
+    <button class="op">🗑 删除当前对话</button>
+  </aside>
+
+  <!-- ================= 主内容区 ================= -->
+  <main>
+    <h1>📊 BI 归因分析 agent</h1>
+    <p class="subtitle">别只问数据是多少,问它<strong>为什么</strong> —— 异常检测 → 维度下钻 → 根因定位,一步步带你找到 GMV 下滑的真凶。</p>
+
+    <div class="thread">
+
+      <!-- 第 1 轮:用户 -->
+      <div class="msg user">
+        <div class="bubble">请你帮我查询各个区域的销售额</div>
+      </div>
+
+      <!-- 第 1 轮:assistant(表格回复) -->
+      <div class="msg assistant">
+        <div class="bubble">
+          <p>以下是各区域的销售额(GMV)汇总:</p>
+          <table>
+            <thead><tr><th>区域</th><th>销售额(GMV)</th></tr></thead>
+            <tbody>
+              <tr><td>华东</td><td>107,419,629.98</td></tr>
+              <tr><td>华南</td><td>55,348,355.61</td></tr>
+              <tr><td>华北</td><td>50,058,965.08</td></tr>
+              <tr><td>华中</td><td>37,293,350.38</td></tr>
+              <tr><td>西南</td><td>23,058,640.32</td></tr>
+              <tr><td>西北</td><td>6,644,731.26</td></tr>
+              <tr><td>东北</td><td>6,034,150.26</td></tr>
+            </tbody>
+          </table>
+          <p><strong>要点:</strong> 华东是销售额最高的区域,约 1.07 亿,遥遥领先;华南、华北、华中处于第二梯队;西北、东北销售额最低,均不足 700 万。</p>
+        </div>
+        <div class="meta">⚡ 本轮 token 消耗:输入 <b>5,616</b> / 输出 <b>401</b> · 约 ￥0.0614</div>
+      </div>
+
+      <!-- 第 2 轮:用户 -->
+      <div class="msg user">
+        <div class="bubble">西南为什么销售额这么低</div>
+      </div>
+
+      <!-- 第 2 轮:assistant(工具过程 + 结论块) -->
+      <div class="msg assistant">
+        <div class="bubble">
+          <!-- 工具过程日志 -->
+          <div class="status">
+            <div class="st-head"><span class="dot"></span>✅ 归因分析完成</div>
+            <div class="step"><span class="who">🔍 第 1 轮</span> · 调用工具 <code>detect_anomaly</code></div>
+            <div class="step"><span class="who">↩ 第 1 轮</span> · <code>detect_anomaly</code> 返回:指标 <code>gmv</code>,基准期 11,489,000 → 对比期 11,489,000;是否异常 ❌</div>
+            <div class="step"><span class="who">🔍 第 2 轮</span> · 调用工具 <code>contribute</code></div>
+            <div class="step"><span class="who">↩ 第 2 轮</span> · <code>contribute</code> 返回:整体变化 -0.0,Top 切片贡献度</div>
+            <div class="step"><span class="who">🔍 第 3 轮</span> · 调用工具 <code>query_metric</code></div>
+            <div class="step"><span class="who">↩ 第 3 轮</span> · <code>query_metric</code> 返回:指标 gmv 整窗汇总</div>
+          </div>
+
+          <!-- 结论 -->
+          <div class="conclusion"><b>结论:</b> 西南销售额偏低的核心根因是重庆门店数量严重不足(仅 4 家),单店产出正常但总量被门店数拖累;同时重庆退款率 1.9% 略高,进一步拉低净 GMV。</div>
+
+          <!-- 证据链 -->
+          <div class="evidence">
+            <div class="ev-title">证据链</div>
+            <ul>
+              <li>西南 2025 年 GMV 约 1149 万,在 7 大区域中排第 5,属于结构性偏低。</li>
+              <li>西南内部 4 城 GMV:成都 689 万、昆明 257 万、贵阳 122 万、重庆仅 80 万,重庆是西南最弱城市。</li>
+              <li>重庆客单价 508 元与成都 529、昆明 527、贵阳 524 基本持平,说明不是"价"的问题,而是"量"的问题。</li>
+              <li>重庆订单数仅 1580 单,远低于成都 13034、昆明 4879、贵阳 2332。</li>
+              <li>下钻门店层:重庆仅 4 家门店,单店产出与其他城市普通门店相当,纯粹是门店数量太少。</li>
+              <li>重庆退款率 1.90%,高于成都 1.35%、昆明 1.27%、贵阳 1.18%。</li>
+            </ul>
+          </div>
+
+          <!-- 建议 -->
+          <div class="suggestion">💡 <b>建议:</b> 1) 优先在重庆加密门店布局,是西南增量最直接的抓手;2) 排查重庆退款率偏高(1.9%)的原因;3) 参考成都旗舰店模式,在重庆核心商圈布局高产出旗舰店。</div>
+        </div>
+        <div class="meta">⚡ 本轮 token 消耗:输入 <b>30,802</b> / 输出 <b>2,975</b> · 约 ￥0.3575</div>
+      </div>
+
+    </div>
+
+    <!-- 输入框示意 -->
+    <div class="chat-bar">例如:为什么 2026 年 6 月的 GMV 环比 5 月下滑了?</div>
+  </main>
+
+</div>
+
+<script>
+// 字号密度切换(仅原型用,回写 app.py 时删除)
+(function () {
+  const seg = document.getElementById('seg');
+  seg.addEventListener('click', function (e) {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const d = btn.dataset.d;
+    document.body.dataset.density = d;
+    seg.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+  });
+})();
+</script>
+</body>
+</html>

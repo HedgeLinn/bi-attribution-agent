@@ -1,0 +1,33 @@
+# c2 SKU 下架(L3:同窗不同切片,须下钻到商品层才命中)
+#
+# 数据锚点(AttributionEngine 实测):
+#   SKU_P0001(数码家电/手机通讯,标价 8,999)2026-05 gmv = 949,758.99;2026-06 = 无数据(已下架)
+#   STORE_S0001 客单价 aov = gmv/orders_count(去重订单数)
+#     2026-05: 1,740,234.97 / 480 = 3,625.49
+#     2026-06:   741,320.76 / 409 = 1,812.52   -50.01%
+#   三个可辩护的贡献度口径(区间必须同时容纳,故取得较宽):
+#     0.3311 = SKU 变化量 / 全量变化量(contribute 无 filters 的默认口径)
+#     0.5458 = SKU 2026-05 gmv / 门店 2026-05 gmv
+#     0.9508 = SKU 变化量 / 门店变化量
+#   干扰项:618 大促后全量回落;门店订单数只跌了 14.8%(480→409),跌的是客单价不是客流
+id: c2_sku_delist
+tier: L3
+category: 零售
+question: "上海徐家汇旗舰店的客单价为什么在 2026 年 6 月暴跌?"
+expected:
+  root_cause_slice:
+    dimension: product
+    level: product_id
+    key: SKU_P0001
+    label: 数码家电手机通讯-001号
+  mechanism: "头部高价 SKU(标价 8,999 元)自 2026-06 起下架:该 SKU 占门店 2026-05 gmv 的 54.6%,6 月起完全无销量,门店客单价 3,625.49 → 1,812.52(-50.01%),而订单数只跌 14.8%(客流不是主因)"
+  contribution_range: [0.30, 0.98]
+  required_depth: product_id
+  must_not_claim: ["降价促销", "爆品自然衰退"]
+distractors: ["618 大促后全量回落", "门店客流量下降"]
+slice_occupancy:
+  dimension: product
+  keys: [SKU_P0001]
+  window: [2026-06-01, 2026-06-30]
+overlap_with: []
+note: "口径说明:任务书给的机制描述是「旗舰智能手机 Pro Max 下架」,数据里该 SKU 的真实名称是「数码家电手机通讯-001号」(base_price 8999),按实际数据写。"

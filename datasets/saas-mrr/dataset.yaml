@@ -1,0 +1,8 @@
+id: saas-mrr
+title: SaaS 订阅收入归因
+description: 订阅快照 + 变动明细双事实表，含半可加指标与加法分解
+version: "1.0.0"
+industry: SaaS
+semantic: semantic.yaml
+data_dir: data
+case_count: 4

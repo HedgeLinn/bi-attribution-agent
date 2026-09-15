@@ -1,0 +1,227 @@
+# 数据集埋点回验(§5.10 约束 4:可回验)
+#
+# 每条期望 = 「造数时以为埋了什么」的可证伪声明,由 scripts/verify_dataset.py 用
+# AttributionEngine 公开方法独立反向检测 —— 不复制造数脚本的逻辑(否则「以为埋了
+# 其实没埋」永远发现不了)。
+#
+# 阈值口径:围绕实测值取 ±10 个百分点(不是精确值 —— 期望声明的是「坑的幅度」,
+# 数据重造后仍在同一量级即视为成立;精确值比对属于回归测试,不是埋点回验)。
+#
+# 14 个坑全覆盖:B1~B6(漏斗)+ C1~C5(口径与完整性)+ D1~D3(归因陷阱)。每条坑至少
+# 1 条「坑本身」的期望;关键的坑再补 1 条**对照项**(同一指标在未受影响的切片上持平),
+# 否则「全站都动了」也能骗过回验。
+dataset_version: "1.0.0"      # 与 semantic.yaml / dataset.yaml 的版本对齐
+
+expectations:
+  # B1 素材 C 上线第 12 天起 CTR 单调衰减(对照:同计划的素材 A 不动)
+  - id: b1_ctr_decay
+    description: 素材 CR_TT_007 上线满 12 天后 CTR 衰减(06-20~07-04 → 07-15~07-29,实测 -39.43%,阈值带 [-50%, -28%])
+    check: {type: metric_change, metric: ctr, filters: {creative_id: CR_TT_007},
+            base: [2026-06-20, 2026-07-04], cmp: [2026-07-15, 2026-07-29],
+            direction: down, min_rate: 0.28, max_rate: 0.50}
+
+  - id: b1_control_creative
+    description: 同计划的素材 CR_TT_001 同期 CTR 持平(实测 +0.56%,阈值带 [0, 10%])—— 对照组,证明衰减是素材自己的生命周期
+    check: {type: metric_change, metric: ctr, filters: {creative_id: CR_TT_001},
+            base: [2026-06-20, 2026-07-04], cmp: [2026-07-15, 2026-07-29], max_rate: 0.10}
+
+  # B2 人群包 AUD_XHS_02 上线第 20 天起 CPC +43%(对照:CVR 不动 → 不是转化变差)
+  - id: b2_cpc_surge
+    description: 小红书人群包 AUD_XHS_02 满 20 天后 CPC 抬升(04-22~05-11 → 05-12~05-31,实测 +42.77%,阈值带 [+32%, +55%])
+    check: {type: metric_change, metric: cpc, filters: {audience_id: AUD_XHS_02},
+            base: [2026-04-22, 2026-05-11], cmp: [2026-05-12, 2026-05-31],
+            direction: up, min_rate: 0.32, max_rate: 0.55}
+
+  - id: b2_cvr_flat
+    description: 同期该人群包 CVR 不变(实测 -0.00%,阈值带 [0, 10%])—— 排除「流量变差」的解释
+    check: {type: metric_change, metric: cvr, filters: {audience_id: AUD_XHS_02},
+            base: [2026-04-22, 2026-05-11], cmp: [2026-05-12, 2026-05-31], max_rate: 0.10}
+
+  # B3 天猫直通车 CVR 一周内 -40% 后自行恢复(CTR 同期不变)
+  - id: b3_cvr_cliff
+    description: 计划 CAMP_TM_02 在 03-16~03-22 的 CVR 断崖(前一周 → 当周,实测 -40.00%,阈值带 [-50%, -30%])
+    check: {type: metric_change, metric: cvr, filters: {campaign_id: CAMP_TM_02},
+            base: [2026-03-09, 2026-03-15], cmp: [2026-03-16, 2026-03-22],
+            direction: down, min_rate: 0.30, max_rate: 0.50}
+
+  - id: b3_cvr_recovery
+    description: 事发后一周 CVR 自行回到原水位(当周 → 03-23~03-29,实测 +66.60%,阈值带 [+30%, +90%])
+    check: {type: metric_change, metric: cvr, filters: {campaign_id: CAMP_TM_02},
+            base: [2026-03-16, 2026-03-22], cmp: [2026-03-23, 2026-03-29],
+            direction: up, min_rate: 0.30, max_rate: 0.90}
+
+  # B4 日预算提前耗尽:消耗被预算截断(04 月日均 ≈ 预算值),之后月份持平
+  - id: b4_budget_cap
+    description: 计划 CAMP_WX_02 2026-04 消耗比 3 月(同为 30 天)少 30.80%,阈值带 [-42%, -20%]
+    check: {type: metric_change, metric: ad_cost, filters: {campaign_id: CAMP_WX_02},
+            base: [2026-03-01, 2026-03-30], cmp: [2026-04-01, 2026-04-30],
+            direction: down, min_rate: 0.20, max_rate: 0.42}
+
+  - id: b4_after_flat
+    description: 被预算截断之后消耗进入平台期(04 月 → 07 月,实测 +3.23%,阈值带 [0, 10%])—— 不是「流量一路下滑」
+    check: {type: metric_change, metric: ad_cost, filters: {campaign_id: CAMP_WX_02},
+            base: [2026-04-01, 2026-04-30], cmp: [2026-07-01, 2026-07-31], max_rate: 0.10}
+
+  # B5 频次过高导致 CTR 衰减(曝光/频次暴涨而触达几乎不动)
+  - id: b5_frequency_surge
+    description: 人群包 AUD_DY_02 加量后频次抬升(07-28~08-10 → 08-11~08-24,实测 +61.19%,阈值带 [+50%, +80%])
+    check: {type: metric_change, metric: frequency, filters: {audience_id: AUD_DY_02},
+            base: [2026-07-28, 2026-08-10], cmp: [2026-08-11, 2026-08-24],
+            direction: up, min_rate: 0.50, max_rate: 0.80}
+
+  - id: b5_ctr_decay
+    description: 同期该人群包 CTR 衰减(实测 -34.92%,阈值带 [-50%, -28%])—— 与 B1 的素材衰退同表象、机理不同
+    check: {type: metric_change, metric: ctr, filters: {audience_id: AUD_DY_02},
+            base: [2026-07-28, 2026-08-10], cmp: [2026-08-11, 2026-08-24],
+            direction: down, min_rate: 0.28, max_rate: 0.50}
+
+  # B6 素材审核被拒:曝光断崖而消耗照跑(CPM 被推高)
+  - id: b6_impression_cliff
+    description: 素材 CR_XHS_004 自 2026-08-05 起曝光消失(07-22~08-04 → 08-05~08-18,实测 -95.01%,阈值带 [-100%, -85%])
+    check: {type: metric_change, metric: ad_impr, filters: {creative_id: CR_XHS_004},
+            base: [2026-07-22, 2026-08-04], cmp: [2026-08-05, 2026-08-18],
+            direction: down, min_rate: 0.85, max_rate: 1.00}
+
+  - id: b6_cost_keeps_running
+    description: 同期该素材的消耗几乎没动(实测 -2.53%,阈值带 [0, 10%])—— 曝光断了钱还在花,才是「审核被拒」的签名
+    check: {type: metric_change, metric: ad_cost, filters: {creative_id: CR_XHS_004},
+            base: [2026-07-22, 2026-08-04], cmp: [2026-08-05, 2026-08-18], max_rate: 0.10}
+
+  # C1 最近 7 天 platform_conv 系统性不完整(业务订单同期正常)
+  - id: c1_conv_backfill
+    description: 平台口径转化在最近一周整段缺失(08-18~08-24 → 08-25~08-31,实测 -70.57%,阈值带 [-80%, -60%])
+    check: {type: metric_change, metric: ad_conv,
+            base: [2026-08-18, 2026-08-24], cmp: [2026-08-25, 2026-08-31],
+            direction: down, min_rate: 0.60, max_rate: 0.80}
+
+  - id: c1_orders_normal
+    description: 同一窗口的业务订单完全正常(实测 -1.09%,阈值带 [0, 10%])—— 同长度窗口,订单不动 → 是回传缺失不是生意下滑
+    check: {type: metric_change, metric: biz_orders,
+            base: [2026-08-18, 2026-08-24], cmp: [2026-08-25, 2026-08-31], max_rate: 0.10}
+
+  # C2 两套口径恒定差 23%(平台口径转化 > 业务付费订单)
+  - id: c2_platform_calibre
+    description: 平台口径转化 6 月 44,104 → 7 月 33,165(-24.80%)—— 与业务口径同幅下滑,但绝对值永远更高
+    check: {type: metric_change, metric: ad_conv,
+            base: [2026-06-01, 2026-06-30], cmp: [2026-07-01, 2026-07-31],
+            direction: down, min_rate: 0.15, max_rate: 0.35}
+
+  - id: c2_business_calibre
+    description: 业务付费订单 6 月 35,856 → 7 月 26,960(-24.81%)—— 两套口径同向同幅,但 7 月绝对值差 6,205 单(+23.02%),不能混用
+    check: {type: metric_change, metric: biz_orders, filters: {is_paid: 付费},
+            base: [2026-06-01, 2026-06-30], cmp: [2026-07-01, 2026-07-31],
+            direction: down, min_rate: 0.15, max_rate: 0.35}
+
+  # C3 两套日界(UTC / 北京)造成跨日错位:同一天两表反向暴走,两天合计一致
+  - id: c3_sessions_shift
+    description: 私域埋点会话 04-21 → 04-22 暴涨(实测 +369.01%,阈值带 [+150%, +600%])—— 会话被记到北京日
+    check: {type: metric_change, metric: track_sessions, filters: {channel_id: CH_PRIV},
+            base: [2026-04-21, 2026-04-21], cmp: [2026-04-22, 2026-04-22],
+            direction: up, min_rate: 1.50, max_rate: 6.00}
+
+  - id: c3_orders_shift
+    description: 私域业务订单 04-21 → 04-22 反向暴跌(实测 -78.57%,阈值带 [-90%, -60%])—— 同一批订单取 UTC 日,落在前一天
+    check: {type: metric_change, metric: biz_orders, filters: {channel_id: CH_PRIV},
+            base: [2026-04-21, 2026-04-21], cmp: [2026-04-22, 2026-04-22],
+            direction: down, min_rate: 0.60, max_rate: 0.90}
+
+  - id: c3_sessions_two_day_total
+    description: 埋点按两天合计则与订单表一致(04-19~20 → 04-21~22,实测 +156.07%,阈值带 [+100%, +220%])
+    check: {type: metric_change, metric: track_sessions, filters: {channel_id: CH_PRIV},
+            base: [2026-04-19, 2026-04-20], cmp: [2026-04-21, 2026-04-22],
+            direction: up, min_rate: 1.00, max_rate: 2.20}
+
+  - id: c3_orders_two_day_total
+    description: 业务订单同样按两天合计(实测 +154.59%,阈值带 [+100%, +220%])—— 两表在两天粒度上吻合,错位只发生在「日」
+    check: {type: metric_change, metric: biz_orders, filters: {channel_id: CH_PRIV},
+            base: [2026-04-19, 2026-04-20], cmp: [2026-04-21, 2026-04-22],
+            direction: up, min_rate: 1.00, max_rate: 2.20}
+
+  # C4 埋点整段缺失(CH_JD 05-04~05-06):没有行 ≠ 0,同期投放与订单正常
+  - id: c4_sessions_absent
+    description: 京东渠道埋点会话在 2026-05-04~05-06 整段没有行(引擎返回 NULL,不是 0)
+    check: {type: slice_absent, metric: track_sessions, dimension: channel, level: channel_id,
+            key: CH_JD, window: [2026-05-04, 2026-05-06]}
+
+  - id: c4_cost_normal
+    description: 同一窗口京东渠道的消耗只是正常节律性回落(实测 -11.65%,阈值带 [0, 30%])—— 没有塌方
+    check: {type: metric_change, metric: ad_cost, filters: {channel_id: CH_JD},
+            base: [2026-05-01, 2026-05-03], cmp: [2026-05-04, 2026-05-06],
+            direction: down, max_rate: 0.30}
+
+  - id: c4_orders_normal
+    description: 同一窗口京东渠道的订单也正常(实测 -11.16%,阈值带 [0, 30%])—— 缺的只有埋点
+    check: {type: metric_change, metric: biz_orders, filters: {channel_id: CH_JD},
+            base: [2026-05-01, 2026-05-03], cmp: [2026-05-04, 2026-05-06],
+            direction: down, max_rate: 0.30}
+
+  # C5 停投空白期:没有行 ≠ 0(停投前/后 14 天持平)
+  - id: c5_pause_absent
+    description: 计划 CAMP_JD_01 在 2026-07-05~07-18 停投,两张表都没有该计划的行
+    check: {type: slice_absent, metric: ad_cost, dimension: campaign, level: campaign_id,
+            key: CAMP_JD_01, window: [2026-07-05, 2026-07-18]}
+
+  - id: c5_resume_appeared
+    description: 复投后该计划重新有消耗(07-05~07-18 无值 → 07-19~08-01 有值)——「新出现」通道,metric_change 对无行窗口判无定义
+    check: {type: appeared, metric: ad_cost, filters: {campaign_id: CAMP_JD_01},
+            base: [2026-07-05, 2026-07-18], window: [2026-07-19, 2026-08-01]}
+
+  - id: c5_pre_post_flat
+    description: 停投前 14 天 vs 复投后 14 天消耗持平(实测 +5.45%,阈值带 [0, 15%])—— 7 月的缺口全来自空白期,不是效率下滑
+    check: {type: metric_change, metric: ad_cost, filters: {campaign_id: CAMP_JD_01},
+            base: [2026-06-21, 2026-07-04], cmp: [2026-07-19, 2026-08-01], max_rate: 0.15}
+
+  # D1 大促脉冲消退:6 月下旬回落属预期(7 月回到 5 月水位)
+  - id: d1_promo_drop
+    description: 6 月下旬 vs 上月同期(等长 12 天)GMV -40.52%,阈值带 [-52%, -30%]
+    check: {type: metric_change, metric: biz_gmv,
+            base: [2026-06-01, 2026-06-12], cmp: [2026-06-19, 2026-06-30],
+            direction: down, min_rate: 0.30, max_rate: 0.52}
+
+  - id: d1_back_to_may
+    description: 7 月整月 vs 5 月整月(同为 31 天)GMV 只差 -0.73%(阈值带 [0, 6%])—— 回到大促前水位,说明是日历现象
+    check: {type: metric_change, metric: biz_gmv,
+            base: [2026-05-01, 2026-05-31], cmp: [2026-07-01, 2026-07-31], max_rate: 0.06}
+
+  # D2 品牌词加预算不带来增量:消耗 +59% 而订单只 +3.3%、CVR 被摊薄 35%
+  - id: d2_brand_budget_up
+    description: 品牌词计划 CAMP_TM_01 预算 +60% 后消耗 +58.84%(07-01~07-24 → 08-01~08-24,阈值带 [+45%, +72%])
+    check: {type: metric_change, metric: ad_cost, filters: {campaign_id: CAMP_TM_01},
+            base: [2026-07-01, 2026-07-24], cmp: [2026-08-01, 2026-08-24],
+            direction: up, min_rate: 0.45, max_rate: 0.72}
+
+  - id: d2_orders_barely_move
+    description: 同期该计划业务订单只多 3.30%(阈值带 [0, 10%])—— 花多 59% 的钱买 3.3% 的单
+    check: {type: metric_change, metric: biz_orders, filters: {campaign_id: CAMP_TM_01},
+            base: [2026-07-01, 2026-07-24], cmp: [2026-08-01, 2026-08-24],
+            direction: up, max_rate: 0.10}
+
+  - id: d2_cvr_diluted
+    description: 同期该计划 CVR 被摊薄 -35.02%(阈值带 [-45%, -25%])—— 加预算买不到更高质量的点击
+    check: {type: metric_change, metric: cvr, filters: {campaign_id: CAMP_TM_01},
+            base: [2026-07-01, 2026-07-24], cmp: [2026-08-01, 2026-08-24],
+            direction: down, min_rate: 0.25, max_rate: 0.45}
+
+  # D3 相关非因果:周末消耗/转化同涨(实为需求节律),CVR 不动,零消耗的自然流量同向
+  - id: d3_cost_weekend_up
+    description: 周末 vs 同周工作日消耗抬升(07-04~05 → 07-06~07,实测 -11.99%,即反向 +13.62%,阈值带 [8%, 20%])
+    check: {type: metric_change, metric: ad_cost,
+            base: [2026-07-04, 2026-07-05], cmp: [2026-07-06, 2026-07-07],
+            direction: down, min_rate: 0.08, max_rate: 0.20}
+
+  - id: d3_conv_weekend_up
+    description: 同一对比里平台转化同幅抬升(实测 -10.79%,反向 +12.09%,阈值带 [6%, 20%])—— 与消耗同步,看似「花钱买转化」
+    check: {type: metric_change, metric: ad_conv,
+            base: [2026-07-04, 2026-07-05], cmp: [2026-07-06, 2026-07-07],
+            direction: down, min_rate: 0.06, max_rate: 0.20}
+
+  - id: d3_cvr_unchanged
+    description: 同一对比里 CVR 不动(实测 +0.77%,阈值带 [0, 5%])—— 消耗改变不了转化率(因果的反证)
+    check: {type: metric_change, metric: cvr,
+            base: [2026-07-04, 2026-07-05], cmp: [2026-07-06, 2026-07-07], max_rate: 0.05}
+
+  - id: d3_natural_orders_rise
+    description: 零消耗的自然流量订单 3 月 → 8 月同样上涨(实测 +8.28%,阈值带 [0, 20%])—— 没花一分钱也在涨,证明是需求侧共同因子
+    check: {type: metric_change, metric: biz_orders, filters: {is_paid: 自然},
+            base: [2026-03-01, 2026-03-31], cmp: [2026-08-01, 2026-08-31],
+            direction: up, max_rate: 0.20}

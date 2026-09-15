@@ -1,0 +1,31 @@
+# c3 促销口径陷阱(「无法归因」类:L2,考诚实度与口径意识)
+#
+# 数据锚点(AttributionEngine 实测):
+#   2026-06-19~06-30 gmv = 4,398,881.68;2026-05 全月 = 13,692,893.29
+#     原始环比 -67.87% —— 但这是 12 天 vs 31 天的**天数口径差**,不是经营塌方
+#     折日均:366,573.47 vs 441,706.24 → 仅 -17.01%
+#   detect_anomaly('gmv','2026-06-19','2026-06-30',...) 判定:
+#     change_rate=-0.1372, is_anomaly=False, baseline_type=flat
+#   (对照:整月 2026-06 是 is_anomaly=True 且 is_expected=True —— 618 在促销日历内)
+#   窗口内最大单切片 STORE_S0001 只解释总变化的 0.1586,不构成主因
+#
+# 正确答案:618 后自然回落属预期 + 原始跌幅主要是天数口径差 → 没有可归因的根因切片。
+# must_not_claim 考的是「别把口径问题硬编成经营事故」,用的是完整断言短语
+# (单选题式的「门店」/「SKU」会误伤任何一句诚实的排除陈述,故不采用)。
+id: c3_promo_noise
+tier: L2
+category: 零售
+question: "为什么 2026 年 6 月下旬的 GMV 比 5 月明显更低?"
+expected:
+  root_cause_slice: null      # 「无法归因」类:正确答案是没有根因切片
+  mechanism: "618 大促(06-01~06-18)后的自然回落属预期;原始 -67.87% 的跌幅主要是天数口径差(12 天 vs 31 天),折日均后仅 -17.01%,未达异常阈值"
+  contribution_range: null    # 无根因切片 → 不评数值维
+  required_depth: date_id     # 名义声明:根因切片为 null 时深度维跳过(视为通过)
+  must_not_claim: ["某个门店出了问题", "某个商品下架"]
+distractors: ["618 大促后自然回落"]
+slice_occupancy:              # 全局量(无切片):整段 6 月下旬
+  dimension: date
+  keys: ["2026-06-19", "2026-06-30"]
+  window: [2026-06-19, 2026-06-30]
+overlap_with: [c1_store_cliff, c2_sku_delist]
+note: "例外声明(§5.10 约束 1):本 case 的观察对象是全局量,其时间窗与 c1/c2 的埋点窗重叠,且 618 干扰项本身是全局的 —— 显式声明为「允许叠加」。"

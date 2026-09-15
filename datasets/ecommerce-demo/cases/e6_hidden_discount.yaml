@@ -1,0 +1,38 @@
+# E6 优惠率上升(隐性价降)(L2:GMV 一字不动,只有换指标才看得见)
+#
+# 数据锚点(AttributionEngine 实测,非估计值):
+#   STORE_S0005 武汉江汉路旗舰店 2025-07 → 2025-08:
+#     gmv         199,738.87 → 204,411.41   +2.34%   ← 总量看不出问题
+#     订单数            353 →         363    +2.83%
+#     客单价(AOV)   565.83 →      563.12    -0.48%
+#     销量              961 →         959    -0.21%
+#     优惠率      0.0179349 →  0.0325639    +81.6%   ← 唯一显形的指标
+#   对照(同期全量口径,证明不是普遍现象):
+#     全量 discount_rate 0.021638 → 0.022039  +1.85%(基本持平)
+#   为什么 gmv 不含折扣:ecommerce-demo 的 gmv = SUM(amount)(见 semantic.yaml),
+#     折扣是独立列 discount,只有 discount_rate = SUM(discount)/gmv 能看见它 ——
+#     本 case 考的就是「换一个指标交叉验证」。
+#   数值维为何不声明区间:GMV 环比 +2.34% 属自然波动,该店对城市 GMV 变化的贡献度
+#     没有区分度,故 contribution_range: null(评分跳过数值维)。
+#   干扰项:店铺流水/订单/客单价全部正常,只有优惠率翻倍
+id: e6_hidden_discount
+tier: L2
+category: 零售
+question: "为什么 2025 年 8 月武汉的优惠率(discount_rate)明显上升?"
+expected:
+  root_cause_slice:
+    dimension: store
+    level: store_id
+    key: STORE_S0005
+    label: 武汉江汉路旗舰店
+  mechanism: "武汉江汉路旗舰店 8 月整月优惠金额翻倍:优惠率 0.0179 → 0.0326(+81.6%),而 GMV(+2.34%)、订单数(+2.83%)、客单价(-0.48%)、销量(-0.21%)全部没动 —— 是隐性价降(靠加大优惠力度维持表面流水),全市同期优惠率基本持平(+1.85%),不是普遍现象"
+  contribution_range: null      # GMV 无异常 → 贡献度无区分度,不评数值维
+  required_depth: store_id
+  must_not_claim: ["GMV 下滑是主因", "全量优惠率普遍上升"]
+distractors: ["店铺流水与订单量正常", "8 月季节性回升"]
+slice_occupancy:              # §5.10 约束 1:本 case 的影响集合
+  dimension: store
+  keys: [STORE_S0005]
+  window: [2025-08-01, 2025-08-31]
+overlap_with: []              # 与其它 case 的影响集合不相交(切片键不同 / 窗口不重叠)
+note: "埋点方式:窗口内该店 discount 列 ×2,amount/quantity 一字不动 —— GMV 与优惠率在数据层被人为解耦。落点 2025-08(与 E4 同窗、不同城)。考察点是「不要只看 GMV」:单指标正常不等于经营正常。"

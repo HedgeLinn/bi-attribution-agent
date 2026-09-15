@@ -1,0 +1,109 @@
+# BI 归因分析示例数据 · 语义层
+# 说明:
+#   - 事实表 orders 与 4 个维度表均为 Parquet(data/*.parquet),DuckDB 直接可查。
+#   - metrics.expression 为 SQL 风格表达式,归因引擎翻译为 DuckDB SQL;
+#     derived 指标可依据 depends_on 逐层计算。
+#   - dimensions.hierarchy 即下钻层级,从粗到细。
+#   - 埋点异常(供验证参考):
+#       store = STORE_S0001 上海徐家汇旗舰店(华东 -> 上海)
+#       product = SKU_P0001 旗舰智能手机 Pro Max(8999 元,该店 GMV 权重 ~55%)
+#       2026-06-01 起该 SKU 下架 -> 客单价 -50%、销量 -13.6%、GMV -57.4%
+#   - schema v2 新增字段(既有字段名与取值一律未变,engine.py 未改造前仍按 v1 读取):
+#       time_aggregation / decompositions / dimensions.name_column / time.calendar
+#   - derived 指标补回除零守卫(NULLIF / IFNULL):原先这三条只作说明、从未被执行,
+#     改为引擎真正消费后必须自带守卫(§3.1 规则 4:除零由表达式自己负责)。
+#     守卫与改造前 engine._DERIVED_SQL 的写法逐一对应,行为不变。
+
+schema_version: "2.0"       # 语义层结构规范版本(docs/REUSE_DESIGN.md §3.2)
+dataset: ecommerce-demo     # 数据集标识(前端下拉与评估结果都用它)
+dataset_version: "1.0.0"    # 这张地图的实例版本,评估结果须绑定它(§3.6①)
+
+fact_table: orders
+date_field: date_id
+
+metrics:
+  gmv:
+    label: GMV
+    expression: SUM(amount)
+    type: additive            # additive 可直接聚合;derived 是派生指标
+    time_aggregation: sum     # 时间上直接求和
+    depends_on: [amount]
+  sales_qty:
+    label: 销量
+    expression: SUM(quantity)
+    type: additive
+    time_aggregation: sum
+    depends_on: [quantity]
+  orders_count:
+    label: 订单数
+    expression: COUNT(DISTINCT order_id)
+    type: additive
+    time_aggregation: sum
+    depends_on: [order_id]
+  aov:
+    label: 客单价
+    expression: gmv / NULLIF(orders_count, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [gmv, orders_count]
+  refund_rate:
+    label: 退款率
+    expression: IFNULL(SUM(refund), 0) / NULLIF(gmv, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [gmv, refund]
+  discount_rate:
+    label: 优惠率
+    expression: IFNULL(SUM(discount), 0) / NULLIF(gmv, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [gmv, discount]
+
+# 分解声明:被归因对象永远是顶层指标,派生指标降格为因子(§4.1)
+decompositions:
+  - target: gmv
+    kind: multiplicative        # GMV = 客单价 × 订单数
+    factors: [aov, orders_count]
+  - target: aov
+    kind: structural            # 客单价 = Σ(商品订单占比 × 商品自身客单价)(§4.3;恒等式
+    entity_dimension: product   #   V = Σ w·r 要求权重与强度按「订单数」口径配对,见契约 v2)
+    factors: [product_mix, price]
+
+dimensions:
+  store:
+    label: 门店
+    table: dim_store
+    key: store_id
+    name_column: store_name
+    hierarchy: [region, city, store_id]    # 下钻层级,从粗到细
+  product:
+    label: 商品
+    table: dim_product
+    key: product_id
+    name_column: sku_name
+    hierarchy: [category, subcategory, product_id]
+  channel:
+    label: 渠道
+    table: dim_channel
+    key: channel_id
+    name_column: channel_name
+    hierarchy: [channel_id]
+  # date 是时间维度,无独立 name 列,故不声明 name_column(label 用 date_id 本身)
+  date:
+    label: 日期
+    table: dim_date
+    key: date_id
+    hierarchy: [year, month, date_id]
+
+# 口径陷阱:数据本身不可比之处(进系统提示词,防止模型把口径差异当业务问题)
+caveats:
+  - "一单多件会拆成多行明细:订单数按 order_id 去重、销量按件求和,两者口径不同,对比时不要混用"
+  - "派生指标先聚合后相除:窗口/切片的客单价 = 期内 GMV ÷ 期内订单数,不等于各日客单价的平均;对比不同长度窗口时注意口径"
+  - "退款率/优惠率的分母是全量 GMV(含未退款、未用券订单),是「整体让利水平」,不是退款订单的退款比例或用券订单的优惠比例"
+
+time:
+  calendar:
+    promos:
+      - name: "618 大促"
+        range: ["2026-06-01", "2026-06-18"]
+        note: "大促后自然回落属预期，不是异常"

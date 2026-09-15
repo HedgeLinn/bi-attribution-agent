@@ -1,0 +1,177 @@
+# 数据集埋点回验(§5.10 约束 4:可回验)
+#
+# 每条期望 = 「造数时以为埋了什么」的可证伪声明,由 scripts/verify_dataset.py 用
+# AttributionEngine 公开方法独立反向检测 —— 不复制造数脚本的逻辑(否则「以为埋了
+# 其实没埋」永远发现不了)。
+#
+# 阈值口径:围绕实测值取 ±10 个百分点(不是精确值 —— 期望声明的是「坑的幅度」,
+# 数据重造后仍在同一量级即视为成立;精确值比对属于回归测试,不是埋点回验)。
+#
+# 六个坑全覆盖:U1~U6。每条坑至少 1 条「坑本身」的期望;关键的坑再补 1 条**对照项**
+# (同一指标在未受影响的切片上持平),否则「全站都动了」也能骗过回验。
+# 三条回验通道都有用到:metric_change(主体)、appeared / slice_absent(U6 的回填批次
+# 在记录注册日之前就有活跃 —— metric_change 对无行窗口按设计判「无定义」,
+# 这一类只能走另外两条通道)。
+dataset_version: "1.0.0"      # 与 semantic.yaml / dataset.yaml 的版本对齐
+
+expectations:
+  # U1 某渠道一批用户的留存断崖(渠道总量正常,只有「渠道 × 批次」这一格塌了)
+  - id: u1_batch_cliff
+    description: 批次 CH_SOCIAL-2026-01 的活跃用户 121 → 31,断崖(04 月 → 05 月,实测 -74.38%,阈值带 [-84%, -64%])
+    check: {type: metric_change, metric: active_users, filters: {batch_id: CH_SOCIAL-2026-01},
+            base: [2026-04-01, 2026-04-30], cmp: [2026-05-01, 2026-05-31],
+            direction: down, min_rate: 0.64, max_rate: 0.84}
+
+  - id: u1_channel_diluted
+    description: 同渠道总量同期只降 9.19%(实测 -9.19%,阈值带 [0, 19%])—— 渠道口径把批次塌方稀释掉,「这个渠道还行」是错的
+    check: {type: metric_change, metric: active_users, filters: {channel_id: CH_SOCIAL},
+            base: [2026-04-01, 2026-04-30], cmp: [2026-05-01, 2026-05-31],
+            direction: down, max_rate: 0.19}
+
+  - id: u1_holds_until_may
+    description: 断崖前一个月该批次还稳得住(138 → 121,实测 -12.32%,阈值带 [0, 23%])—— 不是一路衰减,是 5 月的台阶
+    check: {type: metric_change, metric: active_users, filters: {batch_id: CH_SOCIAL-2026-01},
+            base: [2026-03-01, 2026-03-31], cmp: [2026-04-01, 2026-04-30], max_rate: 0.23}
+
+  - id: u1_peer_batch_control
+    description: 对照批次 CH_APPSTORE-2026-01 同期只降 34.13%(阈值带 [-44%, -24%])—— 同月批次的自然衰减量级,事发批次比它多降一倍
+    check: {type: metric_change, metric: active_users, filters: {batch_id: CH_APPSTORE-2026-01},
+            base: [2026-04-01, 2026-04-30], cmp: [2026-05-01, 2026-05-31],
+            direction: down, min_rate: 0.24, max_rate: 0.44}
+
+  - id: u1_runnerup_noise
+    description: 【已知干扰项,被测的不是埋点】批次 CH_SOCIAL-2025-12 同期降 61.04%(77 → 30,阈值带 [-71%, -51%])—— 小样本方差伪影,却会跟事发批次抢「降幅最大」的位置,故显式登记其量级,重造数据后若它漂到 70%+ 需重估干扰强度
+    check: {type: metric_change, metric: active_users, filters: {batch_id: CH_SOCIAL-2025-12},
+            base: [2026-04-01, 2026-04-30], cmp: [2026-05-01, 2026-05-31],
+            direction: down, min_rate: 0.51, max_rate: 0.71}
+
+  # U2 注册漏斗的分子塌了(漏斗环节定位:分母不动、分子腰斩)
+  - id: u2_reg_rate_cliff
+    description: CH_ADS 注册转化率 5.21% → 2.14%(02 月 → 03 月,实测 -58.98%,阈值带 [-69%, -49%])
+    check: {type: metric_change, metric: reg_rate, filters: {channel_id: CH_ADS},
+            base: [2026-02-01, 2026-02-28], cmp: [2026-03-01, 2026-03-31],
+            direction: down, min_rate: 0.49, max_rate: 0.69}
+
+  - id: u2_visits_flat
+    description: 同渠道同时段访问量几乎没动(4027 → 4067,实测 +0.99%,阈值带 [0, 11%])—— 分母没塌,所以不是流量质量
+    check: {type: metric_change, metric: visits, filters: {channel_id: CH_ADS},
+            base: [2026-02-01, 2026-02-28], cmp: [2026-03-01, 2026-03-31], max_rate: 0.11}
+
+  - id: u2_registrations_cliff
+    description: 同渠道同时段注册数 210 → 87(实测 -58.57%,阈值带 [-69%, -49%])—— 塌的是分子,漏斗的注册这一步
+    check: {type: metric_change, metric: registrations, filters: {channel_id: CH_ADS},
+            base: [2026-02-01, 2026-02-28], cmp: [2026-03-01, 2026-03-31],
+            direction: down, min_rate: 0.49, max_rate: 0.69}
+
+  - id: u2_peer_channel_up
+    description: 同期自然口碑渠道的转化率反而上升(实测 +24.53%,阈值带 [+15%, +35%])—— 「全站转化率下滑」不成立
+    check: {type: metric_change, metric: reg_rate, filters: {channel_id: CH_ORGANIC},
+            base: [2026-02-01, 2026-02-28], cmp: [2026-03-01, 2026-03-31],
+            direction: up, min_rate: 0.15, max_rate: 0.35}
+
+  - id: u2_peer_channel_flat
+    description: 应用商店渠道的转化率同期持平(实测 -3.89%,阈值带 [0, 14%])—— 只有投放渠道塌了
+    check: {type: metric_change, metric: reg_rate, filters: {channel_id: CH_APPSTORE},
+            base: [2026-02-01, 2026-02-28], cmp: [2026-03-01, 2026-03-31], max_rate: 0.14}
+
+  # U3 版本留存断崖(技术问题伪装成业务问题:该版本只占全站 5%,总量口径看不见)
+  - id: u3_version_cliff
+    description: 版本 V4.2.0 活跃用户 241 → 66(04-08 前后各 30 天,实测 -72.61%,阈值带 [-83%, -63%])
+    check: {type: metric_change, metric: active_users, filters: {app_version: V4.2.0},
+            base: [2026-03-08, 2026-04-07], cmp: [2026-04-08, 2026-05-08],
+            direction: down, min_rate: 0.63, max_rate: 0.83}
+
+  - id: u3_total_diluted
+    description: 全站活跃用户同期只降 3.99%(阈值带 [0, 14%])—— 该版本只占基期 5.12%,总量口径把它稀释掉,detect_anomaly 也报不出来
+    check: {type: metric_change, metric: active_users,
+            base: [2026-03-08, 2026-04-07], cmp: [2026-04-08, 2026-05-08],
+            direction: down, max_rate: 0.14}
+
+  - id: u3_peer_version_flat
+    description: 对照版本 V4.2.1 同期只降 1.25%(阈值带 [0, 12%])—— 「各版本同步走低」不成立,断崖只有一个版本
+    check: {type: metric_change, metric: active_users, filters: {app_version: V4.2.1},
+            base: [2026-03-08, 2026-04-07], cmp: [2026-04-08, 2026-05-08], max_rate: 0.12}
+
+  # U4 ARPU 上升实为低价值用户流失的结构效应(反向辛普森,本套数据的灵魂)
+  - id: u4_arpu_up
+    description: 全站 ARPU 1745.03 → 1819.68 分(05 月 → 06 月,实测 +4.28%,阈值带 [+3%, +6%])—— 「数字在涨」是事实,错的是把它读成变好
+    check: {type: metric_change, metric: arpu,
+            base: [2026-05-01, 2026-05-31], cmp: [2026-06-01, 2026-06-30],
+            direction: up, min_rate: 0.03, max_rate: 0.06}
+
+  - id: u4_low_tier_users_drop
+    description: 低价值活跃用户 1149 → 854(实测 -25.67%,阈值带 [-36%, -16%])—— 分母塌方的位置
+    check: {type: metric_change, metric: active_users, filters: {tier_id: 低价值},
+            base: [2026-05-01, 2026-05-31], cmp: [2026-06-01, 2026-06-30],
+            direction: down, min_rate: 0.16, max_rate: 0.36}
+
+  - id: u4_high_tier_users_flat
+    description: 高价值活跃用户同期几乎不动(1231 → 1228,实测 -0.24%,阈值带 [0, 11%])—— 塌的只有低价值这一层,不是「用户盘整体流失」
+    check: {type: metric_change, metric: active_users, filters: {tier_id: 高价值},
+            base: [2026-05-01, 2026-05-31], cmp: [2026-06-01, 2026-06-30], max_rate: 0.11}
+
+  - id: u4_revenue_down
+    description: 同期总收入反而下滑(778.46 万 → 755.53 万分,实测 -2.94%,阈值带 [0, 5%])—— 分子在缩,人均上升不是「生意变好」
+    check: {type: metric_change, metric: revenue,
+            base: [2026-05-01, 2026-05-31], cmp: [2026-06-01, 2026-06-30],
+            direction: down, min_rate: 0.01, max_rate: 0.05}
+
+  - id: u4_active_users_down
+    description: 全站活跃用户 4461 → 4152(实测 -6.93%,阈值带 [-17%, -2%])—— 分母掉得比分子快,比值才上升
+    check: {type: metric_change, metric: active_users,
+            base: [2026-05-01, 2026-05-31], cmp: [2026-06-01, 2026-06-30],
+            direction: down, min_rate: 0.02, max_rate: 0.17}
+
+  - id: u4_high_tier_arpu_down
+    description: 高价值分层自己的人均也在跌(4445.31 → 4302.07 分,实测 -3.22%,阈值带 [-14%, -2%])—— 「高价值用户越来越值钱」不成立
+    check: {type: metric_change, metric: arpu, filters: {tier_id: 高价值},
+            base: [2026-05-01, 2026-05-31], cmp: [2026-06-01, 2026-06-30],
+            direction: down, min_rate: 0.02, max_rate: 0.14}
+
+  - id: u4_low_tier_arpu_down
+    description: 低价值分层自己的人均跌得最狠(137.81 → 121.60 分,实测 -11.76%,阈值带 [-22%, -2%])—— 三个分层没有一个是上升的,整体上升纯粹来自权重变化
+    check: {type: metric_change, metric: arpu, filters: {tier_id: 低价值},
+            base: [2026-05-01, 2026-05-31], cmp: [2026-06-01, 2026-06-30],
+            direction: down, min_rate: 0.02, max_rate: 0.22}
+
+  # U5 DAU 跨期口径(半可加陷阱:窗口末值 ≠ 整段水平,更不等于逐日之和)
+  - id: u5_dau_last_day_up
+    description: 引擎的 dau 口径给出「第二周比第一周高」(532 → 544,实测 +2.26%,阈值带 [+0.5%, +4%])—— 这正是陷阱本身:两个单日快照(06-07 / 06-14)不可比,方向都是反的
+    check: {type: metric_change, metric: dau,
+            base: [2026-06-01, 2026-06-07], cmp: [2026-06-08, 2026-06-14],
+            direction: up, min_rate: 0.005, max_rate: 0.04}
+
+  - id: u5_dedup_users_down
+    description: 同一对比下去重活跃用户 2166 → 2090(实测 -3.51%,阈值带 [-6%, -2%])—— 正确口径是缓慢收缩,不是回暖
+    check: {type: metric_change, metric: active_users,
+            base: [2026-06-01, 2026-06-07], cmp: [2026-06-08, 2026-06-14],
+            direction: down, min_rate: 0.02, max_rate: 0.06}
+
+  - id: u5_no_rebound_vs_may
+    description: 与 5 月下半月比同样没有回暖(dau 571 → 544,实测 -4.73%,阈值带 [-10%, -2%])—— 换基准期也推翻「见底回暖」
+    check: {type: metric_change, metric: dau,
+            base: [2026-05-18, 2026-05-31], cmp: [2026-06-08, 2026-06-14],
+            direction: down, min_rate: 0.02, max_rate: 0.10}
+
+  # U6 线下渠道批次回填(同期群归属错误,数据质量;三条通道里用了 appeared + slice_absent)
+  - id: u6_batch_before_signup_absent
+    description: 记录注册日为 2026-02-05 的同期群在 2025-12 完全没有活跃(引擎返回 0 行而非 0 值)—— 这批人的活动全在记录注册日之后
+    check: {type: slice_absent, metric: active_users, dimension: cohort, level: signup_date,
+            key: "2026-02-05", window: [2025-12-01, 2025-12-31]}
+
+  - id: u6_backfill_appeared
+    description: 同一同期群在 2026-01(记录注册日**之前**)凭空出现 150 名活跃用户—— 回填批次的签名:记录注册日 > 首次事件日
+    check: {type: appeared, metric: active_users, filters: {signup_date: "2026-02-05"},
+            base: [2025-12-01, 2025-12-31], window: [2026-01-01, 2026-01-31]}
+
+  - id: u6_cohort_drift
+    description: 该同期群人数 150 → 174(01 月窗口 → 02 月窗口,实测 +16.00%,阈值带 [0, 26%])—— 同期群人数随回填批次漂移,不是拉新翻倍
+    check: {type: metric_change, metric: active_users, filters: {signup_date: "2026-02-05"},
+            base: [2026-01-01, 2026-01-31], cmp: [2026-02-01, 2026-02-28],
+            direction: up, min_rate: 0.06, max_rate: 0.26}
+
+  - id: u6_channel_flat
+    description: 线下渠道自身的活跃用户同期只降 3.07%(716 → 694,阈值带 [0, 13%])—— 渠道总量没有翻倍,「2 月地推拉新翻倍」在渠道口径上就不成立
+    check: {type: metric_change, metric: active_users, filters: {channel_id: CH_OFFLINE},
+            base: [2026-01-01, 2026-01-31], cmp: [2026-02-01, 2026-02-28],
+            direction: down, max_rate: 0.13}

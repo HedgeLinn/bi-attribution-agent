@@ -1,0 +1,18 @@
+# ---- 内核：归因引擎 ----
+duckdb>=1.0            # 嵌入式分析引擎，直接读数据集包里的 data/*.parquet
+PyYAML>=6.0            # 数据集清单 dataset.yaml + 语义层 semantic.yaml
+
+# ---- Agent loop：模型接入与工具绑定 ----
+langchain-core>=1.0
+langchain-openai>=1.0        # OpenAI 协议路径（BI_API_BASE / BI_API_KEY）
+langchain-anthropic>=0.3     # Anthropic 协议路径（ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN）
+
+# ---- 前端 ----
+# app/attribution_viz.py 用了 altair_chart(width="stretch")，该参数自 1.46.0 才有（1.45.1 会 TypeError）
+streamlit>=1.46
+openpyxl>=3.1            # 通用导入:读取 Excel(.xlsx / .xls)
+
+# ---- 造数脚本（scripts/generate_data.py）----
+numpy>=2.0
+pandas>=2.0
+pyarrow>=14.0          # parquet 读写

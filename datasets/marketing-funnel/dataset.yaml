@@ -1,0 +1,12 @@
+id: marketing-funnel
+title: 营销投放漏斗归因(平台 / 埋点 / 业务三套口径)
+description: >-
+  8 张表、3 个事实表的口径混乱型数据集:平台侧投放(ad_daily)、埋点侧行为(touchpoints)、
+  业务侧订单(orders)三套口径并存且不可混用。14 个坑覆盖漏斗拆分(素材衰退 / 单价上涨 /
+  转化塌陷 / 预算封顶 / 频次疲劳 / 素材被拒)与数据质量(回传缺失 / 口径差 23% / 时区错位 /
+  埋点缺口 / 停投空白)两大类,正确答案既可能是某个切片,也可能是「无法归因」。
+version: "1.0.0"
+industry: 品牌电商效果营销
+semantic: semantic.yaml
+data_dir: data
+case_count: 14

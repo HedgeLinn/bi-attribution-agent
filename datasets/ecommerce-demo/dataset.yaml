@@ -1,0 +1,8 @@
+id: ecommerce-demo
+title: 零售电商归因
+description: 门店/商品/渠道三维星型模型，含 618 大促干扰项
+version: "1.0.0"
+industry: 零售
+semantic: semantic.yaml
+data_dir: data
+case_count: 9

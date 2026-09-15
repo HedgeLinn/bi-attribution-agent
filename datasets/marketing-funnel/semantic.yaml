@@ -1,0 +1,230 @@
+# BI 归因分析数据集 · 语义层(营销投放漏斗:平台 / 埋点 / 业务三套口径)
+#
+# 这套数据存在的意义:把**三套口径**摆在同一张地图上 —— 看任何一个数之前先问
+# 「这是哪套口径的数」。schema v2 的多事实表能力(metrics.source)在这里第一次被
+# 用在「三张事实表 + 五个维度」的完整形态上。
+#   - ad_daily(默认事实表):平台侧投放日报,一行 = 一天 × 计划 × 素材 × 人群包;
+#     曝光 / 点击 / 消耗 / 触达 / **平台回传转化** 都在这里
+#   - orders:业务侧订单明细(一行一单),业务 GMV / 订单数 / 销量在这里
+#   - touchpoints:埋点侧行为日报(一行 = 一天 × 渠道),会话 / 浏览量 / 加购在这里
+# 三张表的时间字段都叫 date_id,**但口径不同**(见 caveats 第 4 条):平台与业务按
+# UTC 日落库,埋点按北京时间落库。跨表加总、跨表比较之前先确认口径。
+#
+# 指标名带口径前缀(ad_ / biz_ / track_),而表达式里引用的是各表的**物理列名** ——
+# 提示词里的指标清单会同时渲染两者,口径归属一眼可见。
+#
+# 漏斗恒等式在数据里成立:曝光 → 点击(点击率)→ 转化(转化率)、消耗 = 点击 × 点击单价。
+# 两个**刻意的例外**写在 caveats 里(平台回传缺数、计费口径与实点击不一致)——它们
+# 不是数据缺陷,是这套数据集要考的口径知识。
+#
+# 金额一律整数「分」(unit: 分);比例类指标用 type: derived(引擎按分子分母各自聚合
+# 后相除),decompositions 声明了每条比率能沿哪两个因子拆(§4.2)。
+schema_version: "2.0"
+dataset: marketing-funnel
+dataset_version: "1.0.0"
+
+fact_table: ad_daily
+date_field: date_id
+
+metrics:
+  # --- 平台侧(ad_daily,默认事实表)------------------------------------------
+  ad_cost:
+    label: 消耗
+    unit: 分
+    expression: SUM(cost)
+    type: additive
+    time_aggregation: sum
+    depends_on: [cost]
+  ad_impr:
+    label: 曝光量
+    expression: SUM(impressions)
+    type: additive
+    time_aggregation: sum
+    depends_on: [impressions]
+  ad_clicks:
+    label: 点击量
+    expression: SUM(clicks)
+    type: additive
+    time_aggregation: sum
+    depends_on: [clicks]
+  ad_reach:
+    label: 触达人数(逐日去重)
+    expression: SUM(reach)
+    type: additive
+    time_aggregation: sum
+    depends_on: [reach]
+  ad_conv:
+    label: 平台口径转化数
+    expression: SUM(platform_conv)
+    type: additive
+    time_aggregation: sum
+    depends_on: [platform_conv]
+  ctr:
+    label: 点击率
+    expression: ad_clicks / NULLIF(ad_impr, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [ad_clicks, ad_impr]
+  cpc:
+    label: 点击单价
+    unit: 分
+    expression: ad_cost / NULLIF(ad_clicks, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [ad_cost, ad_clicks]
+  cvr:
+    label: 转化率
+    expression: ad_conv / NULLIF(ad_clicks, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [ad_conv, ad_clicks]
+  cpa:
+    label: 转化成本
+    unit: 分
+    expression: ad_cost / NULLIF(ad_conv, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [ad_cost, ad_conv]
+  cpm:
+    label: 千次曝光成本
+    unit: 分
+    expression: ad_cost * 1000 / NULLIF(ad_impr, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [ad_cost, ad_impr]
+  frequency:
+    label: 频次(曝光/触达)
+    expression: ad_impr / NULLIF(ad_reach, 0)
+    type: derived
+    time_aggregation: sum
+    depends_on: [ad_impr, ad_reach]
+
+  # --- 业务侧(orders):生意的唯一准绳 ---------------------------------------
+  biz_gmv:
+    label: 业务 GMV
+    unit: 分
+    expression: SUM(gmv_amount)
+    type: additive
+    time_aggregation: sum
+    source: orders
+    depends_on: [gmv_amount]
+  biz_orders:
+    label: 业务订单数
+    expression: COUNT(DISTINCT order_id)
+    type: additive
+    time_aggregation: sum
+    source: orders
+    depends_on: [order_id]
+  biz_qty:
+    label: 业务销量
+    expression: SUM(quantity)
+    type: additive
+    time_aggregation: sum
+    source: orders
+    depends_on: [quantity]
+  biz_aov:
+    label: 业务客单价
+    unit: 分
+    expression: biz_gmv / NULLIF(biz_orders, 0)
+    type: derived
+    time_aggregation: sum
+    source: orders
+    depends_on: [biz_gmv, biz_orders]
+
+  # --- 埋点侧(touchpoints):行为数据,另一套日界 ----------------------------
+  track_sessions:
+    label: 会话数
+    expression: SUM(sessions)
+    type: additive
+    time_aggregation: sum
+    source: touchpoints
+    depends_on: [sessions]
+  track_pv:
+    label: 浏览量
+    expression: SUM(page_views)
+    type: additive
+    time_aggregation: sum
+    source: touchpoints
+    depends_on: [page_views]
+  track_atc:
+    label: 加购数
+    expression: SUM(add_carts)
+    type: additive
+    time_aggregation: sum
+    source: touchpoints
+    depends_on: [add_carts]
+
+# 比率分解(§4.2):factors 恰两个,**分子在前、分母在后**,且必须是**指标名**。
+# 刻意不声明 cpm:它的表达式带 ×1000,与「分子/分母」的比率恒等式不同构,
+# 声明成 ratio 会让分解出来的效应差 1000 倍(宁可不声明,不许声明错的)。
+decompositions:
+  - target: ctr
+    kind: ratio
+    factors: [ad_clicks, ad_impr]
+  - target: cvr
+    kind: ratio
+    factors: [ad_conv, ad_clicks]
+  - target: cpc
+    kind: ratio
+    factors: [ad_cost, ad_clicks]
+  - target: cpa
+    kind: ratio
+    factors: [ad_cost, ad_conv]
+  - target: frequency
+    kind: ratio
+    factors: [ad_impr, ad_reach]
+  - target: biz_aov
+    kind: ratio
+    factors: [biz_gmv, biz_orders]
+
+dimensions:
+  # is_paid / is_brand 放在最粗一层:它们是**口径开关**(付费 / 自然、品牌词 / 非品牌词),
+  # 分析任何「投放带来的增长」之前先在这两层把口径分清(§5.4 的 D2)
+  campaign:
+    label: 投放计划
+    table: dim_campaign
+    key: campaign_id
+    name_column: campaign_name
+    hierarchy: [is_paid, is_brand, campaign_type, campaign_id]
+  # launch_date 只声明在 creative 这一维里:字段名到维度的映射是「先声明者得」,
+  # 两个维度都带同名层级字段会让下游只能看到其中一个
+  creative:
+    label: 素材
+    table: dim_creative
+    key: creative_id
+    name_column: creative_name
+    hierarchy: [creative_type, launch_date, creative_id]
+  audience:
+    label: 人群包
+    table: dim_audience
+    key: audience_id
+    name_column: audience_name
+    hierarchy: [audience_type, start_date, audience_id]
+  channel:
+    label: 渠道
+    table: dim_channel
+    key: channel_id
+    name_column: channel_name
+    hierarchy: [channel_type, channel_id]
+  date:
+    label: 日期
+    table: dim_date
+    key: date_id
+    hierarchy: [year, month, date_id]
+
+time:
+  calendar:
+    promos:
+      - name: "618 大促"
+        range: ["2026-06-01", "2026-06-18"]
+        note: "大促脉冲结束后自然回落属预期,不是异常;比较 6 月与 7 月时先按天数口径折算"
+
+caveats:
+  - "**三套口径不可混**:平台侧(ad_daily)、埋点侧(touchpoints)、业务侧(orders)是三个互不同源的系统。平台口径的转化数是**回传**值,与业务订单数没有恒等关系,两者也不能相加;要回答「生意到底怎么样」,以业务订单为唯一准绳。同一段时间两套口径的绝对水平对不上是**正常现象**,不是数据错误。"
+  - "**平台口径转化存在系统性回传缺失**:平台回传不是实时的,某些区间会整体偏少(比例性缺失,不是随机噪声)。看到平台转化或转化率的环比暴跌,先查这段时间的回传完整性(与点击量、与业务订单交叉验证),再谈业务原因。"
+  - "**「没有行」不是 0**:三张表里某个切片在某天没有行,表示那天**没采到 / 没投放**,不是「取值为 0」。停投的计划在停投期完全没有行;把它当成 0 会把日均、占比、均值全部算错。缺失只能排除,不能补零。"
+  - "**两套日界**:业务订单的 created_at 是 UTC 时间戳、date_id 取 **UTC 日**;埋点的 date_id 按**北京时间**落库。跨日凌晨的流量在两张表上会落到相邻但不同的日期 —— 跨表按日对齐时出现一天的错位,属口径差异而非业务波动。"
+  - "**计费口径**:消耗按「平台计费的点击」结算,不一定等于当日实际产生的点击。素材被平台拒审 / 下架时曝光与点击会断崖,而**计费照旧**;此时消耗与曝光、点击的比例关系被破坏,先怀疑计费口径,不要直接推「量价变化」。"
+  - "**频次是日内口径**:触达人数逐日去重、跨日不可加,窗口内把触达求和得到的是「每日触达之和」,高于真实去重人数;因此频次(曝光 / 触达)只能当作「日内频次」的近似,跨窗口比较时两段窗口的天数要一致。"
+  - "**素材与人群包有生命周期**:素材从 dim_creative.launch_date 起算投放天数,人群包从 dim_audience.start_date 起算。同一素材的「投放天数」与「日历日期」不是一回事 —— 评估素材表现(点击率 / 频次)时按上线天数对齐,不要按日历日对齐。"
+  - "**金额一律整数「分」**:指标返回的 2400000 就是 24,000.00 元。换算成元除以 100,别把分当成元(跨数据集看数时尤其容易错)。"

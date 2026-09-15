@@ -1,0 +1,8 @@
+id: user-journey
+title: 用户旅程归因
+description: 事件流 + 同期群的用户级数据集:渠道/分层/版本/批次四维,跨粒度指标(活跃用户不可加、DAU 半可加、注册转化率跨人群、人均收入分子分母)
+version: "1.0.0"
+industry: 互联网
+semantic: semantic.yaml
+data_dir: data
+case_count: 6
