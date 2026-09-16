@@ -1,0 +1,17 @@
+# Streamlit 配置文件
+# 1) 关闭文件热重载监视:避免 streamlit 遍历 sys.modules 时撞上 torch.classes
+#    的特殊 __path__ 代理,导致终端刷 RuntimeError(与 app 逻辑无关)。
+# 2) 关闭匿名使用统计上报。
+
+[server]
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
+
+# 视觉主题:专业的 BI 分析配色(indigo 主色 + slate 中性灰)
+[theme]
+primaryColor = "#4F46E5"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8FAFC"
+textColor = "#0F172A"

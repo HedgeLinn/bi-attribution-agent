@@ -144,15 +144,24 @@ def _render_decompositions(decompositions: list) -> None:
 
 
 def _render_calendar(time_block: Mapping[str, Any]) -> None:
-    """促销日历:命中促销期的"异常"其实是预期脉冲,不该报为业务问题(§4.4)。"""
-    promos = (time_block.get("calendar") or {}).get("promos") or []
-    if not promos:
+    """日历条目:命中这些区间的"异常"其实是预期脉冲,不该报为业务问题(§4.4)。
+
+    日历名是自由形状(time.calendar 是「日历种类 -> 条目列表」),所以这里遍历全部种类,
+    只认 `promos` 一种会让确认向导里新建的日历一条都看不见 —— 写进去了、界面里没有,
+    用户只会以为没保存成功。
+    """
+    calendars = time_block.get("calendar") or {}
+    if not any(calendars.values()):
         return
-    st.markdown("**促销日历**")
-    for p in promos:
-        span = " ~ ".join(p.get("range") or [])
-        note = f" —— {p['note']}" if p.get("note") else ""
-        st.markdown(f"- {p.get('name', '')} `{span}`{note}")
+    st.markdown("**日历**")
+    for name, entries in calendars.items():
+        if not entries:
+            continue
+        st.markdown(f"*{name}*")
+        for item in entries:
+            span = " ~ ".join(item.get("range") or [])
+            note = f" —— {item['note']}" if item.get("note") else ""
+            st.markdown(f"- {item.get('name', '')} `{span}`{note}")
 
 
 def _render_caveats(caveats: list) -> None:

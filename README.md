@@ -102,7 +102,7 @@ python scripts/generate_data.py   # 重新造数（固定随机种子，结果�
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `BI_API_KEY` | 空 | 模型 API Key，未设置时无法调用 LLM |
-| `BI_API_BASE` | `http://new-api.mypy.cn/v1` | 网关地址 |
+| `BI_API_BASE` | `http://new-api.cn/v1` | 网关地址 |
 
 模型 `deepseek-v4-flash`，temperature=0（分析任务要稳定可复现），显式关闭思考模式以加快 tool calling。
 

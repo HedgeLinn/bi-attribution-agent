@@ -15,3 +15,7 @@ venv/
 
 # Streamlit 会话持久化：运行时状态，每跑一次都会变
 chat_history.json
+
+# 导入的待确认包暂存区：上传后的中间态，确认（或跳过）后就搬进 datasets/<id>/ 并删掉它。
+# 它是一份**没经过人工闸门**的自动推断地图，绝不能入库（datasets/ 本身是入库的）。
+datasets/.pending/

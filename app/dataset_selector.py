@@ -262,8 +262,12 @@ def _initial_index(options: list[DatasetInfo]) -> int:
 
 
 def _display_name(info: DatasetInfo) -> str:
-    """下拉里显示 title 而不是 id:用户选的是「零售电商归因」,不是目录名。"""
-    return info.title
+    """下拉里显示 title 而不是 id:用户选的是「零售电商归因」,不是目录名。
+
+    未确认的数据集(跳过了确认向导的那批)加后缀:它们**能用**,但地图没过人工闸门 ——
+    用户在选择时就该知道这件事,而不是等结论偏了才发现口径是机器猜的。
+    """
+    return info.title + ("(未确认)" if info.unconfirmed else "")
 
 
 def _activate(info: DatasetInfo) -> None:

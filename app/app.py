@@ -47,6 +47,7 @@ from dataset_selector import (  # noqa: E402
     visible_sessions,
 )
 from attribution_viz import render_from_events  # noqa: E402
+from import_wizard import render_wizard_area  # noqa: E402
 from importer_ui import render_importer  # noqa: E402
 
 # 展示辅助 / 聊天历史 / 全局样式 / 结论解析,均从 app.py 拆出以压行数;入口只做接线。
@@ -171,6 +172,11 @@ def main():
     _configure_history(os.path.join(ROOT, "chat_history.json"))
     _init_state()
     _render_sidebar()
+
+    # 确认向导进行中:主区域整个让给它(侧边栏仍在,用户能看见自己在哪个数据集上)。
+    # 向导是一次性的准入门槛,让位期间不该还能对着半成品数据集提问。
+    if render_wizard_area():
+        st.stop()
 
     # 当前会话消息回放
     sess = _current_session()

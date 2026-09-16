@@ -59,6 +59,9 @@ class DatasetInfo:
     version: str = ""
     industry: str | None = None
     case_count: int | None = None
+    # 这份地图是否**从未经过人工确认**(导入时跳过了确认向导,见 harness/import_confirm.py)。
+    # 缺省 False:4 套手写数据集没有这个字段,不该被判成未确认。
+    unconfirmed: bool = False
 
 
 def discover_datasets(datasets_dir: str | Path = DEFAULT_DATASETS_DIRNAME) -> list[DatasetInfo]:
@@ -207,7 +210,11 @@ def _read_manifest(path: Path) -> dict:
 
 
 def _build_info(root: Path, raw: dict, manifest: Path, dataset_id: str) -> DatasetInfo:
-    """清单 -> DatasetInfo:清单里的相对名字解析成 root 下的路径,可选字段给默认值。"""
+    """清单 -> DatasetInfo:清单里的相对名字解析成 root 下的路径,可选字段给默认值。
+
+    只读**已知字段**,未知字段静默忽略 —— 所以给清单加字段(dataset.yaml 的
+    `unconfirmed`)对既有数据集与本模块都是向后兼容的。
+    """
     semantic_name = _optional_text(raw, "semantic", manifest) or SEMANTIC_NAME
     data_dirname = _optional_text(raw, "data_dir", manifest) or DEFAULT_DATA_DIRNAME
     return DatasetInfo(
@@ -220,6 +227,7 @@ def _build_info(root: Path, raw: dict, manifest: Path, dataset_id: str) -> Datas
         version=_optional_text(raw, "version", manifest) or "",
         industry=_optional_text(raw, "industry", manifest),
         case_count=_optional_int(raw, "case_count", manifest),
+        unconfirmed=_optional_bool(raw, "unconfirmed", manifest),
     )
 
 
@@ -259,6 +267,22 @@ def _optional_int(raw: dict, field: str, manifest: Path) -> int | None:
     if isinstance(value, str) and value.strip().lstrip("+").isdigit():
         return int(value.strip())
     raise DatasetError(f"清单字段 `{field}` 应为整数,实际是 {value!r}:{manifest}")
+
+
+def _optional_bool(raw: dict, field: str, manifest: Path) -> bool:
+    """可选布尔字段(unconfirmed):缺省 False,只认 YAML 布尔与 true/false 文本。
+
+    比 _optional_int 严格:这里没有「数字字符串」那种合理写法,乱写(如 unconfirmed: 1)
+    就该被看见,而不是静默当成 True / False 之一。
+    """
+    value = raw.get(field)
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise DatasetError(f"清单字段 `{field}` 应为布尔值,实际是 {value!r}:{manifest}")
 
 
 def _child_path(root: Path, name: str, field: str, manifest: Path) -> Path:

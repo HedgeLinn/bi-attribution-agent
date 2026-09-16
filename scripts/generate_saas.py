@@ -21,9 +21,11 @@
   * s3 跨期求和陷阱:基础版 ACC_B001(500 席 @¥99)2026-05-28 降配 -450 席(-¥44,550);
       同时埋一批「试用潮」账户(36 户 × 1 席,4 月初签约、**5 月中旬到期流失**)——
       它是「MRR 跨期求和」这条静默错误的显形摆锤,两种口径给出**不同的主因**:
-        - **末日水平口径**(正确):基期取 4 月末的 299 元/户、对比期取到期前最后一天的
-          299 元/户 → 切片变化 0,进不了排名;它们的流失是真实水平事件(合计 -¥10,764,
-          占 5 月降幅 18.8%),但**逐切片看不出来**。
+        - **末日水平口径**(正确):半可加切片在两个窗口各取「窗口内**全局**最后有数据日」
+          的水平(4 月 = 04-30、5 月 = 05-31);这批账户在 04-30 还有 ¥299/户,到 05-31
+          已流失(没有行 → 该侧按 0 计入,见语义层 caveat)→ 切片变化 -¥299/户,
+          合计 -¥10,764,占 5 月降幅 18.8%,排在 ACC_B001(-¥44,550)之后(量级差两个
+          数量级),不会盖过真主因。
         - **逐日求和口径**(错误):4 月整月都在(求和 ¥301,990)、5 月只剩半个月
           (求和 ¥106,743)→ 求和后「掉」¥195,247,比真实主因(ACC_B001 求和口径
           -¥128,700)还大,于是把试用客户到期误判成主因。
@@ -81,6 +83,19 @@ SUFFIX = ("科技有限公司", "信息技术有限公司", "数据服务有限�
 _NAMES = count(1)   # 账户名序号(创建顺序确定 -> 名字唯一且可复现)
 
 
+def _name_of(index: int) -> str:
+    """账户显示名:城市 / 词元 / 后缀三段各自独立进位,周期 = 8 × 10 × 4 = 320 > 账户规模。
+
+    不能三段都取 index 的模 —— 那样周期只有 lcm(8, 10, 4) = 40(且 index % 4 完全由
+    index % 8 决定,后缀不携带任何新信息),80 个账户里 index 与 index+40 必然同名:
+    实测 80 户两两重名(40 对),按显示名作答会有歧义。
+    """
+    city = CITY[index % len(CITY)]
+    word = WORD[(index // len(CITY)) % len(WORD)]
+    suffix = SUFFIX[(index // (len(CITY) * len(WORD))) % len(SUFFIX)]
+    return city + word + suffix
+
+
 def _add_months(when: date, months: int) -> date:
     """月份偏移,返回当月 1 号(只用于「每月一次」的随机事件排期)。"""
     total = (when.year * 12 + when.month - 1) + months
@@ -116,8 +131,7 @@ class Account:
 def _new_account(account_id: str, plan: str, signup: date, seats: int) -> Account:
     """新签账户:签约首笔变动 = 首月水平,席位单价取自套餐。"""
     index = next(_NAMES)
-    account = Account(account_id, CITY[index % 8] + WORD[index % 10] + SUFFIX[index % 4],
-                      plan, signup, seats)
+    account = Account(account_id, _name_of(index), plan, signup, seats)
     account.events.append((signup, KIND_NEW, seats * PRICES[plan]))
     return account
 
@@ -254,28 +268,34 @@ if __name__ == "__main__":
               + " ".join(f"{plan} {value / 100:,.0f}" for plan, value in parts))
 
     # ③ s3 的摆锤:试用潮(只统计摆锤账户 ACC_T9xx)
-    #    末日水平口径:基期取 4 月末值、对比期取「到期前最后一天」值 → 每户变化 0(切片看不见它)
+    #    末日水平口径:两个窗口各取「窗口内全局最后有数据日」的水平 → 5 月侧已流失(无行→0)
     #    逐日求和口径:4 月整月 vs 5 月半个月 → 求和后「掉」一大截(口径幻觉)
     print("\n[③ s3 摆锤:试用潮 ACC_T9xx(4 月 vs 5 月)]")
     cohort = ("SELECT sub.account_id AS a, sub.date_id AS d, SUM(sub.mrr_amount) AS v FROM "
               + sub + " WHERE acc.account_id LIKE 'ACC_T9%' GROUP BY a, d")
-    # 切片口径 = 每账户在各窗口内取「最后有数据日」的值(与 slice_rows 一致)
-    def slice_last(start: str, end: str) -> int:
-        return one("SELECT SUM(v) FROM (SELECT a, v,"
-                   " ROW_NUMBER() OVER (PARTITION BY a ORDER BY d DESC) AS rn"
-                   f" FROM ({cohort}) WHERE d BETWEEN '{start}' AND '{end}') WHERE rn = 1")
-    level = [slice_last("2026-04-01", "2026-04-30"), slice_last("2026-05-01", "2026-05-31")]
+
+    # 切片口径 = 引擎 slice_rows 的半可加分支:基准日由**全表**决定(窗口内最后有数据日),
+    # 不是各切片自己的最后一天;基准日没有该切片数据的切片按 0 计入(快照:没有行 = 水平 0)。
+    # 这里必须查全表取基准日 —— 只用 cohort 取 MAX(d) 会得到 05-14,算不出引擎的真实行为。
+    def slice_at_ref(start: str, end: str) -> tuple[str, int]:
+        ref = one(f"SELECT MAX(date_id) FROM sub WHERE date_id BETWEEN '{start}' AND '{end}'")
+        return ref, one(f"SELECT SUM(v) FROM ({cohort}) WHERE d = '{ref}'")
+
+    (ref_base, base_v), (ref_cmp, cmp_v) = (slice_at_ref("2026-04-01", "2026-04-30"),
+                                            slice_at_ref("2026-05-01", "2026-05-31"))
     summed = dict(rows(f"SELECT substr(d, 1, 7) AS m, SUM(v) FROM ({cohort})"
                        " GROUP BY m ORDER BY m"))
-    churn = one("SELECT SUM(mov.amount) FROM mov JOIN acc ON mov.account_id = acc.account_id"
-                " WHERE mov.movement_type = 'churn' AND acc.account_id LIKE 'ACC_T9%'")
-    print(f"   切片末日值(每户取窗口内最后有数据日): 4 月 {level[0] / 100:,.0f} 元"
-          f" / 5 月 {level[1] / 100:,.0f} 元"
-          f" → 环比变化 {(level[1] - level[0]) / 100:+,.0f} 元(每户都是 299 元,进不了排名)")
+    households = base_v // PRICES["试用版"]      # 36 户;每户 1 席 = 299 元
+    print(f"   切片末日值(引擎口径,基准日 {ref_base} / {ref_cmp}):"
+          f" 4 月 {base_v / 100:,.0f} 元 / 5 月 {cmp_v / 100:,.0f} 元"
+          f" → 环比 {(cmp_v - base_v) / 100:+,.0f} 元"
+          f"({households} 户 × {(cmp_v - base_v) / max(households, 1) / 100:+,.0f} 元/户,"
+          "全部在榜、每户 -100%)")
     print(f"   逐日求和: 4 月 = {summed['2026-04'] / 100:,.0f} 元"
           f" / 5 月 = {summed['2026-05'] / 100:,.0f} 元"
           f" → 变化 {(summed['2026-05'] - summed['2026-04']) / 100:+,.0f} 元(口径幻觉)")
-    print(f"   这 36 户 5 月到期流失,带走真实水平 {churn / 100:+,.0f} 元(存在,但不体现在任何切片的变化里)")
+    print(f"   同批账户的流失流(churn_mrr)= 上面的末日口径变化 —— "
+          f"它们是真事件,但量级排在 ACC_B001(-44,550 元)之后")
 
     # ④ 四组埋点的水平变化(cases 的数值锚点)
     print("\n[④ 埋点水平变化(末日口径)]")

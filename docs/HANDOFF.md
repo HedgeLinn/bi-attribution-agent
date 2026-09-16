@@ -155,7 +155,17 @@ python scripts/check_semantic.py --dataset ecommerce-demo   # 期望：语义层
 - **A 档** `attribution/profile.py` + `scripts/profile_data.py`(23 用例):表统计 -> 语义层草稿。实测:saas-mrr 的 `mrr_amount` 被正确识别为**半可加候选**(§6.1 点名此工具的首要理由),ecommerce 的维度层级草稿与真值**逐字一致**
 - **C 档** `attribution/annotations.py` + `harness/context.py` 回注(36 用例):annotations.jsonl 原子读写、CJK 二字词相关性选择(单字切分会把「月」误注入,已修)、`render_system_prompt(..., query=None)` 选择性注入(query=None 行为逐字不变,既有 33 测试为回归证据)
 - **写入侧(补记,2026-09-14 接线)** ✅:M6 遗留的「run 结束时沉淀结论」已落地——`loop.run(persist=True)` 两处出口把结构化结论追加进 `datasets/<id>/annotations.jsonl`(「已排除」-> ruled_out、「证据链」-> evidence,从 confirmed 弹出;非 JSON 不沉淀);评估路径 `run_live` 显式 `persist=False`(批量跑分不污染知识库)
-- 已知边界(记录):单调性阈值 0.90 余量薄;外键只用了必要条件;事实表判据是「行数最多」;指标草稿只覆盖数值列→SUM;日期维度表的 year/month 层级会丢;`--dataset` 不带 `--out` 会写进数据集包;context.py 恰 300 行零余量
+- **M6 语义收集 + B 档人工确认向导**:上传不再直接产出正式数据集 —— `harness/importer.py` 的
+  `import_upload` 落 `datasets/.pending/<id>/`(暂存区,超时自动清理,不出现在数据集发现列表),
+  `app/` 四步确认向导(① 事实表与时间轴 ② 指标口径 ③ 关系与单位 ④ 世界知识)收齐答案后由
+  `harness/import_confirm.py` 的 `commit`/`skip`/`reconfirm` 落位:写盘前两道闸门
+  (assert_valid 地图自洽 + 真引擎逐指标冒烟),清单最后写。「跳过」的包按自动地图落位并标
+  `unconfirmed: true`(版本仍是 "import"),选择器显示「(未确认)」后缀,可随时回来「补确认」。
+  UI 与逻辑分层:`app/wizard_common.py`(纯逻辑+控件键命名表)/ `app/wizard_steps.py`(四步控件)/
+  `app/wizard_ledger.py`(答案账本 + 控件原值回填,扛 Streamlit 每 run 清 widget 的问题)/
+  `app/import_wizard.py`(状态机+落位)。**「前端只读语义层」表述不适用于这段流程**:它管的是
+  「地图的诞生」而非「地图的修改」,准入门槛 = 从未人工确认;一旦确认入口即消失(见 REUSE_DESIGN §6.2 B 档)。
+- 已知边界(记录):单调性阈值 0.90 余量薄;外键只用了必要条件;事实表判据是「行数最多」;指标草稿只覆盖数值列→SUM;日期维度表的 year/month 层级会丢;`--dataset` 不带 `--out` 会写进数据集包;context.py 恰 300 行零余量;`harness/import_*.py`(import_answers/import_confirm/import_draft/import_metric/import_pending)在防回退词汇测试的 `harness/` 扫描范围内,新数据集词汇(指标名/列名/实体取值)只允许出现在 `datasets/*/semantic.yaml`
 
 ### M7(可选)交叉维度 2D 分解 —— 未做(成本明显高于其他项,见 REUSE_DESIGN §4.5)
 
