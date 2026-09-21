@@ -100,7 +100,7 @@ app/app.py (Streamlit)          harness/run.py (CLI)
 
 ### 提示词与工具描述
 
-- 提示词是**两段式**（`harness/context.py`）：数据集无关的方法论（常量 `_METHODOLOGY`）+ 由语义层渲染的数据集上下文（指标目录含**单位**、维度层级、探测出的时间范围、促销日历、口径陷阱）+ 可选的历史结论回注（`annotations.jsonl`，按相关性取 top-3）。
+- 提示词是**两段式**（`harness/context.py`）：数据集无关的方法论（常量 `_METHODOLOGY`）+ 由语义层渲染的数据集上下文（指标目录含**单位**、维度层级、探测出的时间范围、促销日历、口径陷阱）。
 - 模型可见的工具语义写在 docstring 里（`harness/tool_catalog.py` 渲染），**参数说明直接决定下钻正确率**（尤其「过滤用 key 而不是显示名」）。
 - **方法论的任何改动都会影响评估成绩**，别顺手改。
 
@@ -112,7 +112,6 @@ datasets/<id>/
 ├── semantic.yaml       # 语义层 = 归因的地图（schema v2）
 ├── expectations.yaml   # 埋点黄金断言（verify_dataset.py 回验）
 ├── cases/*.yaml        # 评估 case（evaluate_agent.py 消费）
-├── annotations.jsonl   # 归因结论沉淀（run 结束时写入；评估路径 persist=False 不写）
 └── data/*.parquet
 
 datasets/.pending/<id>/   # 上传暂存区：import_upload 的落点；确认/跳过/超时清理前不出现在数据集发现列表
@@ -134,7 +133,6 @@ datasets/.pending/<id>/   # 上传暂存区：import_upload 的落点；确认/�
   `app/wizard_common.py`（含控件键命名表，渲染/记账/回填共用）、`app/wizard_ledger.py`（答案账本 +
   控件原值回填，扛 Streamlit 每 run 清未渲染 widget 的问题）、`app/wizard_steps.py`。
   前沿接口约定:`harness/import_upload` 的返回 dict(`ok/id/title/fact_table/date_field/metrics/dimensions/rows`)是冻结契约,不得改。
-- **沉淀是锦上添花**：结论不可解析 / 语义层不可用 / 写盘失败都静默放弃，不许拖垮主流程。
 
 ## 改代码前必须知道的硬规则
 
