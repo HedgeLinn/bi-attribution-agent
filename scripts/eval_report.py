@@ -53,14 +53,11 @@ def require_api_key() -> None:
 
 def run_live(question: str) -> tuple[str, dict]:
     """真跑一个问题:harness.loop.run + 事件收集(延迟 import,离线路径不碰 LLM 依赖)。
-
-    传 persist=False:评估是测量,批量跑分不该把 case 答案沉淀进数据集的
-    annotations.jsonl(那会污染知识库,还让 repo 目录在评分间变脏)。
     """
     from harness import loop   # noqa: PLC0415  延迟导入:mock 模式不需要 langchain
 
     events: list[dict] = []
-    content = loop.run(question, verbose=False, on_event=events.append, persist=False)
+    content = loop.run(question, verbose=False, on_event=events.append)
     return content, usage_from_events(events)
 
 

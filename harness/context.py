@@ -20,21 +20,14 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any
 
-from attribution.annotations import Annotation, load_annotations, select_relevant
 from attribution.semantic import Semantic, load_yaml
-from harness.datasets import DEFAULT_DATASETS_DIRNAME
 
 __all__ = [
     "CalendarEntry", "DatasetContext", "render_dataset_context", "render_dimension_catalog",
     "render_filter_rules", "render_metric_catalog", "render_system_prompt",
 ]
-
-# 归因结论沉淀(§6.3):单次注入 3 条、每条 ≤240 字(历史只是起点,不该挤掉本次分析)。
-ANNOTATION_TOP_N = 3
-ANNOTATION_CHARS = 240
 
 # 数据集无关的方法论:假设-验证循环、下钻纪律、业务问题 vs 数据问题、输出格式。
 # 换数据集时这段**一个字都不用改**——凡是需要跟着数据变的,都不该写在这里。
@@ -143,14 +136,11 @@ def render_system_prompt(semantic: Semantic, dataset_context: DatasetContext | N
                          context_hint: str | None = None) -> str:
     """渲染系统提示词 = 数据集无关的方法论(常量) + 数据集上下文(由语义层渲染)。
 
-    签名演进(M6,§6.3):新增可选参数 query。不给时输出与加这个参数之前**逐字相同**。
+    query 参数保留仅为向后兼容,当前未被使用。
     M9 新增 context_hint:会话内上轮分析的结构化摘要,注入在最末尾(模型注意力最强处)。
     评估场景不传 = 原行为。
     """
     prompt = f"{_METHODOLOGY}\n{render_dataset_context(semantic, dataset_context)}"
-    history = _annotations_block(semantic, query)
-    if history:
-        prompt = f"{prompt}\n\n{history}"
     if context_hint:
         prompt = f"{prompt}\n\n{context_hint}"
     return prompt
@@ -281,36 +271,3 @@ def _caveats_block(facts: DatasetContext) -> str:
     if not facts.caveats:
         return ""
     return "\n".join(["## 口径陷阱", *(f"  - {caveat}" for caveat in facts.caveats)])
-
-
-# 以下为「历史归因结论」段(§6.3):数据集过往结论的选择性回注
-def _annotations_block(semantic: Semantic, query: str | None) -> str:
-    """按相关性取 top-n 条历史结论,渲染成「时间 / 原问题 / 要点 / 已排除假设」段落。
-
-    沉淀文件在数据集目录下(datasets/<id>/annotations.jsonl,与 harness.datasets 同布局);
-    没给问题、没有文件、文件有坏行、选不出相关项,都安静地不注入——沉淀是锦上添花。
-    """
-    if not query:
-        return ""
-    target = Path(DEFAULT_DATASETS_DIRNAME) / semantic.dataset / "annotations.jsonl"
-    try:
-        picked = select_relevant(load_annotations(str(target)), query, ANNOTATION_TOP_N)
-    except Exception:  # noqa: BLE001  见 docstring:沉淀的读写问题不许拖垮主流程
-        return ""
-    lines = ["## 历史归因结论(与本问题相关的过往分析,仅供参考)",
-             "  这些是提问的起点,不是证据:必须在当前数据上用工具重新验证,不许当结论照抄。"]
-    for item in picked:
-        lines.append(f"  - [{item.ts}] {item.query}")
-        if item.confirmed:
-            lines.append(f"      结论要点: {_summary_text(item.confirmed)}")
-        if item.ruled_out:
-            lines.append(f"      已排除: {'; '.join(item.ruled_out)}")
-    return "\n".join(lines) if picked else ""
-
-
-def _summary_text(confirmed: Mapping[str, Any]) -> str:
-    """结构化结论 -> 一行「键=值」要点(非文本取值转 JSON);超长截断:全文不属于提示词。"""
-    pairs = [(key, item if isinstance(item, str) else json.dumps(item, ensure_ascii=False))
-             for key, item in confirmed.items()]
-    text = "; ".join(f"{key}={item}" for key, item in pairs)
-    return text if len(text) <= ANNOTATION_CHARS else text[:ANNOTATION_CHARS] + "…"

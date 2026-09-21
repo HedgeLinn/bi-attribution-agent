@@ -125,7 +125,6 @@ bi-attribution-agent/
 │       ├── ground_truth.yaml        # 埋点真值（造数时写入）
 │       ├── cases/*.yaml             # 评估用例
 │       ├── expectations.yaml        # 数据集专属黄金断言
-│       ├── annotations.jsonl        # 归因结论沉淀
 │       └── data/*.parquet
 ├── attribution/
 │   ├── engine.py                    # 归因算法：query / contribute / detect（**不认 DuckDB**）
@@ -136,8 +135,7 @@ bi-attribution-agent/
 │   ├── semantic_diff.py             # 两版地图对比：契约 + 输入归一化（§3.6③）
 │   ├── semantic_diff_rules.py       # 变更级别判定表（纯规则，无 IO）
 │   ├── decompose.py                 # LMDI 乘法/加法/比率/结构分解（§4）
-│   ├── profile.py                   # 数据探测（含半可加识别）
-│   └── annotations.py               # 结论沉淀读写
+│   └── profile.py                   # 数据探测（含半可加识别）
 ├── harness/
 │   ├── datasets.py                  # 数据集包发现与解析（§3.3）
 │   ├── loop.py                      # agent 循环（提示词改为现场渲染）
@@ -193,8 +191,6 @@ graph TD
   CTX --> SEM
   CTX --> PROF[attribution/profile.py]
   SEM --> YAML[(semantic.yaml)]
-  LOOP --> ANN[attribution/annotations.py]
-  ANN --> JSONL[(annotations.jsonl)]
 ```
 
 无环：`engine` 不认识 `harness`，`expression` / `decompose` 不认识 `engine`，`context` 不认识 `engine`。
@@ -217,8 +213,6 @@ flowchart LR
   E --> T
   T --> L
   L --> R[结构化结论]
-  R --> A[(annotations.jsonl)]
-  A -.下次注入.-> C
 ```
 
 ## 3. 关键设计（基础设施）
@@ -458,7 +452,7 @@ dataset_version: "1.3.0"   # 这张地图的实例版本
 **③ 破坏性变更靠机械检测，不靠人记**
 
 `attribution/semantic.py` 提供 **diff**：对比两版地图，自动判定增量/破坏性，
-并列出受影响的 case 与 annotations。
+并列出受影响的 case。
 
 ```powershell
 python scripts/check_semantic.py --old <旧语义层> --new <新语义层>
@@ -510,7 +504,6 @@ def test_engine_has_no_hardcoded_vocabulary():
 | **工具 schema 的 enum** | `contribute` 的 `metric` / `dimension` 取值域变了，模型看到的可选项完全不同 |
 | **系统提示词的数据集上下文** | 指标清单、维度层级、日期范围、促销日历、口径陷阱 |
 | 指标体系与下钻路径 | 零售是「区域→城市→门店」，SaaS 是「账户→套餐」 |
-| 历史结论（annotations） | 不该串味——选 saas-mrr 时不能看到电商的历史归因 |
 
 **前端做三件事，只做前两件：**
 
@@ -852,14 +845,8 @@ slice_occupancy:                  # 用于冲突检查（§5.9）
 
 ### 6.3 C 档｜从分析过程沉淀（闭环）
 
-每次 `run()` 结束追加一条到 `datasets/<name>/annotations.jsonl`：
-
-```json
-{"ts": "...", "query": "...", "hypotheses": [...], "confirmed": {...},
- "ruled_out": [...], "evidence": [...]}
-```
-
-下次渲染上下文时按相关性注入「历史结论」。必须**选择性注入**（按相似度取 top-n）。
+会话内多轮对话记忆（M9）：从最近一条 assistant 消息的 events 中提取结构化摘要，
+注入下一次 `run()` 的系统提示词末尾，让模型知道"刚才分析到哪了"。
 
 ## 7. 验证策略（三层）
 
@@ -923,7 +910,7 @@ slice_occupancy:                  # 用于冲突检查（§5.9）
 | **M5a** | `saas-mrr`（4 case）—— 最小成本验证 schema v2 的半可加设计 | MRR 不再被时间求和；waterfall 分解成立 |
 | **M5b** | `marketing-funnel`（14 case）—— 主力数据集 | 14 个坑可回验、可评分 |
 | **M5c** | `user-journey`（6 case）—— 验证跨粒度与同期群 | 转化率/留存率可算；U4 结构效应可拆 |
-| **M6** | 语义收集：profiler（含半可加识别）+ annotations 沉淀 | profiler 草稿与人工语义层比对 |
+| **M6** | 语义收集：profiler（含半可加识别） | profiler 草稿与人工语义层比对 |
 | **M7**（可选） | 交叉维度 2D 分解 | — |
 
 **排序理由**：

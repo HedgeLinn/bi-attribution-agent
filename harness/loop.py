@@ -18,14 +18,10 @@
 
 import json
 import sys
-from datetime import datetime
-from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from attribution.annotations import Annotation, append_annotation
 from harness import context, tools
-from harness.datasets import DEFAULT_DATASETS_DIRNAME
 from harness.llm import build_llm, MODEL
 
 # 单次运行 token 成本展示:复用 llm_cost 的单价表(与全局记账口径一致)。
@@ -64,7 +60,7 @@ def _extract_usage(msg: AIMessage) -> tuple[int, int]:
     return 0, 0
 
 
-def run(query: str, verbose: bool = True, on_event=None, persist: bool = True,
+def run(query: str, verbose: bool = True, on_event=None,
         context_hint: str | None = None) -> str:
     """跑一轮完整的归因分析。query 是用户的问题,返回模型最终的分析结论。
 
@@ -74,8 +70,6 @@ def run(query: str, verbose: bool = True, on_event=None, persist: bool = True,
       - {"type": "usage", "input_tokens": ..., "output_tokens": ..., "cost_cny": ...}
       - {"type": "final", "content": "..."}
     供前端实时展示「假设-验证」过程用;传 None 则只靠 verbose print。
-    persist: 结束时把结构化结论沉淀到 annotations.jsonl(§6.3);评估等测量场景
-    传 False,别让批量跑分把 repo 内的沉淀文件写成自己的答案。
     context_hint: 会话内上轮分析的结构化摘要(M9),注入系统提示词末尾;
     评估等测量场景不传 = 原行为。
     """
@@ -100,7 +94,6 @@ def run(query: str, verbose: bool = True, on_event=None, persist: bool = True,
             content, in_tokens, out_tokens = _finalize(
                 llm, messages, resp.content, in_tokens, out_tokens, on_event)
             _emit_finish(on_event, content, in_tokens, out_tokens)
-            _persist_conclusion(query, content, persist, verbose)
             return content
 
         # 有工具调用:逐个执行,把观察结果作为 tool 消息追加
@@ -113,7 +106,6 @@ def run(query: str, verbose: bool = True, on_event=None, persist: bool = True,
     content, in_tokens, out_tokens = _finalize(
         llm, messages, final_resp.content, in_tokens, out_tokens, on_event)
     _emit_finish(on_event, content, in_tokens, out_tokens)
-    _persist_conclusion(query, content, persist, verbose)
     return content
 
 
@@ -228,60 +220,3 @@ def _run_tool_calls(resp: AIMessage, runnable: dict, messages: list, step: int,
                                     tool_call_id=call["id"]))
 
 
-# ---------------------------------------------------------------------------
-# 结论沉淀(§6.3 的写半侧):把最终 JSON 结论转成一条 annotation 追加进数据集目录
-# ---------------------------------------------------------------------------
-# 「图表」只是给前端挑默认图型的提示,不是结论内容 —— 留在 confirmed 里会挤占
-# 回注提示词的 240 字符预算(annotations 会按相关性把 confirmed 摘要注回上下文)
-_EXCLUDED_FROM_CONFIRMED = ("已排除", "证据链", "图表")
-
-
-def _to_annotation(query: str, content: str, ts: str) -> Annotation | None:
-    """结构化结论 -> 沉淀记录;结论 JSON 不可解析时返回 None(不沉淀半截结论)。
-
-    「已排除」-> ruled_out、「证据链」-> evidence,并从 confirmed 里弹出:
-    这两个键不参与相关性检索(annotations._searchable 只收 query/hypotheses/
-    confirmed),留在 confirmed 里会让被否掉的假设与长证据链污染后续回注。
-    """
-    conclusion = _parse_conclusion(content)
-    if conclusion is None:
-        return None
-    return Annotation(
-        ts=ts,
-        query=query,
-        confirmed={key: value for key, value in conclusion.items()
-                   if key not in _EXCLUDED_FROM_CONFIRMED},
-        ruled_out=_text_items(conclusion.get("已排除")),
-        evidence=_text_items(conclusion.get("证据链")),
-    )
-
-
-def _text_items(value) -> tuple[str, ...]:
-    """结论里的文本列表键:列表逐项转文本,裸字符串包成单元素(模型手写 JSON 常漏方括号)。"""
-    if isinstance(value, str):
-        return (value,) if value.strip() else ()
-    if isinstance(value, list):
-        return tuple(str(item) for item in value if str(item).strip())
-    return ()
-
-
-def _persist_conclusion(query: str, content: str, persist: bool, verbose: bool) -> None:
-    """把本轮结论沉淀到 datasets/<id>/annotations.jsonl(§6.3)。
-
-    沉淀是锦上添花:结论不可解析、语义层不可用、写入失败都静默放弃,不许拖垮
-    主流程;verbose 时打印放弃原因,好让操作者知道沉淀没有发生。
-    """
-    if not persist:
-        return
-    try:
-        annotation = _to_annotation(
-            query, content, datetime.now().astimezone().isoformat(timespec="seconds"))
-        if annotation is None:
-            if verbose:
-                print("[沉淀] 结论不是 JSON,本次分析不沉淀")
-            return
-        target = Path(DEFAULT_DATASETS_DIRNAME) / tools.semantic().dataset / "annotations.jsonl"
-        append_annotation(str(target), annotation)
-    except Exception as err:  # noqa: BLE001  沉淀失败不影响本轮分析结果
-        if verbose:
-            print(f"[沉淀] 归因结论未写入:{err}")

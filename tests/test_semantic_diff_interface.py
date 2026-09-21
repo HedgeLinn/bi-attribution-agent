@@ -111,9 +111,9 @@ def test_cli_unknown_dataset_exits_input_error(capsys):
 
 
 # ----------------------------------------------------------------------
-# 破坏性变更的影响分析:列出具体 case 与 annotations
+# 破坏性变更的影响分析:列出具体 case
 # ----------------------------------------------------------------------
-def _make_dataset_package(tmp_path, *, with_annotations: bool) -> tuple[str, str]:
+def _make_dataset_package(tmp_path) -> tuple[str, str]:
     """造一个 datasets/<id>/ 布局的数据集包,返回 (新语义层路径, 数据集 id)。"""
     root = tmp_path / "diff-fixture"
     (root / "cases").mkdir(parents=True)
@@ -121,34 +121,20 @@ def _make_dataset_package(tmp_path, *, with_annotations: bool) -> tuple[str, str
         "id: diff-fixture\ntitle: 假数据集\nversion: \"1.0.0\"\n", encoding="utf-8")
     (root / "cases" / "c1.yaml").write_text("id: c1\n", encoding="utf-8")
     (root / "cases" / "c2.yaml").write_text("id: c2\n", encoding="utf-8")
-    if with_annotations:
-        (root / "annotations.jsonl").write_text("{}\n", encoding="utf-8")
     new_layer = base_layer()
     new_layer["metrics"]["revenue"]["expression"] = "SUM(net_amount)"   # 破坏性
     new_path = write_layer(root, new_layer, "semantic.yaml")
     return new_path, "diff-fixture"
 
 
-def test_cli_breaking_change_lists_affected_cases_and_annotations(tmp_path, capsys):
-    """破坏性变更时:影响分析要落到具体 case 与 annotations,而不是泛泛一句「重算受影响 case」。"""
-    new_path, _ = _make_dataset_package(tmp_path, with_annotations=True)
+def test_cli_breaking_change_lists_affected_cases(tmp_path, capsys):
+    """破坏性变更时:影响分析要落到具体 case,而不是泛泛一句「重算受影响 case」。"""
+    new_path, _ = _make_dataset_package(tmp_path)
     old_path = write_layer(tmp_path, base_layer(), "old.yaml")
     code = main(["--old", old_path, "--new", new_path])
     out = capsys.readouterr().out
     assert code != 0
     assert "受影响 case(2 个" in out and "c1、c2" in out
-    assert "annotations.jsonl 已存在" in out
-
-
-def test_cli_breaking_change_without_annotations_reports_absence(tmp_path, capsys):
-    """annotations 不存在时要明说「尚不存在」,让合并者知道没有历史结论需要重跑。"""
-    new_path, _ = _make_dataset_package(tmp_path, with_annotations=False)
-    old_path = write_layer(tmp_path, base_layer(), "old.yaml")
-    code = main(["--old", old_path, "--new", new_path])
-    out = capsys.readouterr().out
-    assert code != 0
-    assert "受影响 case(2 个" in out and "c1、c2" in out
-    assert "annotations.jsonl 尚不存在" in out
 
 
 def test_cli_breaking_change_outside_package_degrades_to_hint(tmp_path, capsys):

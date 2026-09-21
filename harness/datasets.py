@@ -6,7 +6,6 @@
     ├── dataset.yaml       # 元信息(本模块读它)
     ├── semantic.yaml      # 语义层(那张"地图")
     ├── expectations.yaml  # 数据集专属黄金断言(M4)
-    ├── annotations.jsonl  # 归因结论沉淀(M6)
     └── data/*.parquet
 
 设计约束:
@@ -148,7 +147,7 @@ def _explicit_info(data_dir: str | Path | None, semantic_path: str | Path | None
     """由显式路径构造 DatasetInfo(规则 ①,不读 dataset.yaml)。
 
     用户自带数据时不存在数据集包,`root` 取语义层所在目录——
-    数据集包里清单与语义层同级,这个位置对后续产物(expectations/annotations)最接近。
+    数据集包里清单与语义层同级,这个位置对后续产物(expectations)最接近。
 
     异常:
         DatasetError: 只给了其中一条路径,或路径不存在。

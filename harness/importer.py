@@ -186,7 +186,7 @@ def dump_yaml(path: Path, payload) -> None:
     """原子写 YAML:allow_unicode 保住中文,键序即文件行序(sort_keys=False)。
 
     先写 .tmp 再 os.replace(同盘符下是原子操作):中途崩了要么是旧内容、要么是
-    新内容,不会留下半份地图被引擎当合法地图装载(手法同 attribution/annotations.py)。
+    新内容,不会留下半份地图被引擎当合法地图装载。
     """
     text = yaml.safe_dump(dict(payload), allow_unicode=True, sort_keys=False)
     tmp = path.with_name(path.name + ".tmp")

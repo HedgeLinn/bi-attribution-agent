@@ -153,8 +153,6 @@ python scripts/check_semantic.py --dataset ecommerce-demo   # 期望：语义层
 ### ~~M6 语义收集~~ ✅ 已完成(2026-09-13)——方案全部落地
 
 - **A 档** `attribution/profile.py` + `scripts/profile_data.py`(23 用例):表统计 -> 语义层草稿。实测:saas-mrr 的 `mrr_amount` 被正确识别为**半可加候选**(§6.1 点名此工具的首要理由),ecommerce 的维度层级草稿与真值**逐字一致**
-- **C 档** `attribution/annotations.py` + `harness/context.py` 回注(36 用例):annotations.jsonl 原子读写、CJK 二字词相关性选择(单字切分会把「月」误注入,已修)、`render_system_prompt(..., query=None)` 选择性注入(query=None 行为逐字不变,既有 33 测试为回归证据)
-- **写入侧(补记,2026-09-14 接线)** ✅:M6 遗留的「run 结束时沉淀结论」已落地——`loop.run(persist=True)` 两处出口把结构化结论追加进 `datasets/<id>/annotations.jsonl`(「已排除」-> ruled_out、「证据链」-> evidence,从 confirmed 弹出;非 JSON 不沉淀);评估路径 `run_live` 显式 `persist=False`(批量跑分不污染知识库)
 - **M6 语义收集 + B 档人工确认向导**:上传不再直接产出正式数据集 —— `harness/importer.py` 的
   `import_upload` 落 `datasets/.pending/<id>/`(暂存区,超时自动清理,不出现在数据集发现列表),
   `app/` 四步确认向导(① 事实表与时间轴 ② 指标口径 ③ 关系与单位 ④ 世界知识)收齐答案后由
@@ -172,7 +170,6 @@ python scripts/check_semantic.py --dataset ecommerce-demo   # 期望：语义层
 
 - `attribution/profile.py` + `scripts/profile_data.py` —— 从数据生成语义层草稿，
   **含半可加候选识别**（§6.1）
-- `attribution/annotations.py` + `annotations.jsonl` —— 归因结论沉淀与**选择性**注入（§6.3）
 
 ### M7（可选）交叉维度 2D 分解
 
@@ -250,7 +247,7 @@ python scripts/check_semantic.py --dataset ecommerce-demo   # 期望：语义层
 | `app/app.py` **658 行**（>300） | HEAD 起的历史欠账；新逻辑已尽量外移（M3-b 的战场，届时处理） |
 | `scripts/generate_data.py` **359 行**（>300） | 同上 |
 | **`datasets/ecommerce-demo/semantic.yaml` 缺 `caveats` 节点** | 提示词里的「口径陷阱」段永远为空。渲染路径有测试覆盖，**加上节点即自动生效** |
-| `scripts/check_semantic.py` 的**影响分析只做了一半** | ✅ 已修(2026-09-14):破坏性变更时列出受影响 case(`datasets/<id>/cases/*.yaml` 的 stem)与 annotations.jsonl 是否存在;语义层不在数据集包布局里时降级为提示 |
+| `scripts/check_semantic.py` 的**影响分析只做了一半** | ✅ 已修(2026-09-14):破坏性变更时列出受影响 case(`datasets/<id>/cases/*.yaml` 的 stem);语义层不在数据集包布局里时降级为提示 |
 | `attribution/decompose.py` / `engine_decompose.py` / `semantic_schema.py` **恰好 300 行** | 零余量，下一个改动即破线（M3-a 已把 semantic 系列从超限压回线内，别再往上加） |
 | **`CHART_LIMIT` 是每条消息的上限，不是页面总量**（审核 2026-09-20） | 会话内消息数无上限（`MAX_SESSIONS=30` 只限会话数）。极端情形：40 条 assistant 消息 × 上限 24 = 每轮 rerun 最多 960 张图；`_save_history` 每次追加都全量重序列化（实测 40 条 ≈ 2.5 MB / 17 ms，当前量级可接受，但**没有防护栏**） |
 | **结构性 `total_*` 与 `query_metric` 同页并置**（审核 2026-09-20） | 新增的查询图让两类**不可比**的总量会同页出现。各自独立成图，没破「不得画进同一张瀑布图 / 同一条叙事线」的红线，但读者更容易并排比较 —— 低严重度，仅提示 |
@@ -423,7 +420,7 @@ python scripts/check_semantic.py --old <旧> --new <新>
 | **M3-b 可视化** | 1 个 | `app/`（**新逻辑必须放独立模块**，`app.py` 已 658 行） | 图能渲染；不加新依赖 |
 | **M4 评估脚手架** | 2 个并行 | ① `harness/loop.py`（结构化结论）+ 其测试<br>② `scripts/evaluate_agent.py` + case schema + `datasets/*/cases/` | 评分是否真机械可判；准确率的分母有没有被偷偷缩小 |
 | **M5 数据集** | **建议串行** | 每个数据集 1 个 agent：`datasets/<name>/` 全包（造数 + 语义层 + case + `ground_truth.yaml`） | 埋点能否被**回验**；切片×时间是否真隔离；半可加是否被拦住 |
-| **M6 语义收集** | 2 个并行 | ① `attribution/profile.py` + `scripts/profile_data.py`<br>② `attribution/annotations.py` + `harness/context.py` 注入 | profiler 草稿与人工语义层比对；注入是否选择性 |
+| **M6 语义收集** | 2 个并行 | ① `attribution/profile.py` + `scripts/profile_data.py`<br>② B 档人工确认向导 | profiler 草稿与人工语义层比对 |
 
 **M5 为什么建议串行**：四套数据集彼此独立，理论上可全并行；但 `saas-mrr` 是用来**验证 schema v2 的新表达能力
 （半可加 / 跨粒度 / 同期群）设计得对不对**的——如果它推翻设计，另外三套就得返工。所以先做最小的一套。

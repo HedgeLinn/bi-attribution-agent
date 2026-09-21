@@ -46,10 +46,9 @@ _LEVEL_TAGS = {LEVEL_BREAKING: "[破坏性]", LEVEL_INCREMENTAL: "[增量]"}
 _MUST_DO = ("检测到破坏性变更——合并前必须:① bump dataset_version;"
             "② 重算受影响 case(期望的贡献区间 / required_depth 已随口径或下钻路径失效)。")
 
-# 数据集包定位:语义层同级(或上一级)的 dataset.yaml 标出包根,case 与 annotations 都在它之下
+# 数据集包定位:语义层同级(或上一级)的 dataset.yaml 标出包根
 _MANIFEST_NAME = "dataset.yaml"
 _CASES_DIRNAME = "cases"
-_ANNOTATIONS_NAME = "annotations.jsonl"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -90,7 +89,7 @@ def _report_changes(changes: Sequence[Change], dataset_root: Path | None = None)
     """逐条打印变更(破坏性在前);末尾给出必须做的事,并返回退出码。
 
     dataset_root:新语义层所属的数据集包根目录(定位不到则为 None)。破坏性变更时,
-    影响分析要落到具体 case 与 annotations(REUSE_DESIGN §3.6:列出受影响对象,而不是
+    影响分析要落到具体 case(REUSE_DESIGN §3.6:列出受影响对象,而不是
     只泛泛说「重算受影响 case」);定位不到包时降级为提示,不影响退出码。
     """
     if not changes:
@@ -133,7 +132,7 @@ def _affected_cases(dataset_root: Path) -> list[str]:
 
 
 def _print_impact(dataset_root: Path | None) -> None:
-    """破坏性变更的影响分析:列出须重算的 case,并提示 annotations 的可比性后果。"""
+    """破坏性变更的影响分析:列出须重算的 case。"""
     if dataset_root is None:
         print("提示:未能定位数据集包(语义层同级或上一级无 dataset.yaml),"
               "无法列出受影响 case——请把语义层放进 datasets/<id>/ 布局。")
@@ -143,12 +142,6 @@ def _print_impact(dataset_root: Path | None) -> None:
         print(f"受影响 case({len(cases)} 个,须重算贡献区间 / required_depth):{'、'.join(cases)}")
     else:
         print(f"该数据集包尚无 {_CASES_DIRNAME}/ 目录或无 case 文件({dataset_root / _CASES_DIRNAME})。")
-    annotations = dataset_root / _ANNOTATIONS_NAME
-    if annotations.is_file():
-        print(f"annotations:{_ANNOTATIONS_NAME} 已存在——破坏性变更会让其中历史归因结论失去可比性,"
-              "需评估是否重跑。")
-    else:
-        print(f"annotations:{_ANNOTATIONS_NAME} 尚不存在。")
 
 
 # ----------------------------------------------------------------------
