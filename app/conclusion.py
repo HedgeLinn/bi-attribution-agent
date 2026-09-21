@@ -69,12 +69,24 @@ def render_conclusion(parsed, raw):
         st.markdown(raw or "*(无内容)*")
 
 
-def render_assistant_msg(msg):
-    """渲染一条 assistant 消息:结论 + 可选 token 消耗说明。"""
-    render_conclusion(msg.get("parsed"), msg.get("content"))
+def render_token_caption(msg):
+    """本轮的 token 消耗说明。
+
+    独立成函数,是因为图表要插在**结论与它之间**:当轮的顺序是「结论 → 图 → token」,
+    回放必须一致,而原来的 `render_assistant_msg` 把结论和 token 绑在一起,插不进去。
+    """
     if msg.get("input_tokens") is not None:
         st.caption(
             f"⚡ 本轮 token 消耗:输入 **{msg.get('input_tokens', 0):,}** "
             f"/ 输出 **{msg.get('output_tokens', 0):,}**"
             f" · 约 ￥{msg.get('cost_cny', 0):.4f}"
         )
+
+
+def render_assistant_msg(msg):
+    """渲染一条 assistant 消息的**文字部分**(结论 + token 消耗说明)。
+
+    图表**不在**这里 —— 它由 app.py 编排在两者之间(见 render_token_caption 的说明)。
+    """
+    render_conclusion(msg.get("parsed"), msg.get("content"))
+    render_token_caption(msg)

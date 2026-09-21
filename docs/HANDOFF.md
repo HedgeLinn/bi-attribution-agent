@@ -188,6 +188,61 @@ python scripts/check_semantic.py --dataset ecommerce-demo   # 期望：语义层
 
 ---
 
+### M8 图表持久化 + 图型扩充 ✅（2026-09-20）
+
+**问题**：图表是**一次性**的 —— 画图代码在 `if prompt:` 分支里（`app/app.py`），而 `st.chat_input`
+的值只在那一次 run 有效，所以下一轮**任何**交互（切会话、刷新、点按钮）图就没了；写历史时也不存
+事件流，回放路径只有文本。同时图型只覆盖「归因」半边：`query_metric`（最像传统 BI 查数的工具）
+连一张柱状图都画不出来，比率型指标直接「不画」。
+
+**改动**：
+
+- **留存**：assistant 消息 payload 增 `id` + `events`（紧凑 JSON 串，只留 `tool_call`/`tool_result`）；
+  回放时 `render_from_events` 用**同一段渲染代码**重建图 → 切会话 / 刷新后图仍在
+- **新图型（2 → 8 种）**：BI 基础三件（柱状 / 折线 / 表格，`query_metric` 驱动）+ 基线对比
+  （`detect_anomaly` 的 base / cmp ±MAD）+ 变化率条形（比率型 —— **从「不画」改成画它能诚实支撑的东西**）
+- **图型切换器**：查数结果挂 `st.segmented_control`，用户点选换图型（只换渲染，不重取数、不花模型钱）
+- **分级渲染**：步数超 `chart_plan.CHART_LIMIT` 时只画最近的 + 一个展开按钮（**不砍图**；
+  streamlit 是命令式执行，未渲染的分支零前端开销）
+- **模块拆分**（压回 300 行红线）：`app/attribution_viz.py` 303 → 257 行，新增
+  `chart_data`（纯数据 builder）/ `chart_theme`（配色 token）/ `chart_plan`（键名 + 折叠计划）/
+  `chart_basic` / `chart_attr`（渲染）
+- **顺带修掉一个既有数据安全 bug**：`_save_history` 旧实现是 `open("w")` **先截断**再 `json.dump`，
+  payload 含不可序列化对象时整份聊天历史会被清成空文件 → 改为先序列化到内存 + 临时文件
+  `os.replace`（`tests/test_history_events.py` 钉住：失败时磁盘上旧文件分毫不动）
+- **提示词**：`_METHODOLOGY` 输出格式加可选字段「图表」（给前端挑默认图型）；
+  `loop._EXCLUDED_FROM_CONFIRMED` 把它排除出沉淀回注（避免挤占 240 字符预算）
+
+**验收**：`pytest -o addopts="" -q` = **683 passed**（基线 658 + 新增 25）。视觉规范先出原型页
+（Altair 生成 spec + vega-embed 渲染）经用户确认后才落地。
+
+**独立审核（2026-09-20）**：审核 agent 只读证伪，7 条声明 6 条**已证实**、1 条**部分证伪**
+（`chart_hint` 只传当轮、不传回放 → 同一条消息刷新后默认图型会变），另挖出 8 条未覆盖风险。
+逐字搬运一条经 AST 穷举确认：16 个函数里 15 个逐字等价（第 16 个就是本次有意重写的调度入口）；
+色值搬运零偏差。已修：
+
+- `chart_hint` 回放补齐（并加 AppTest 钉住：有提示走提示、无提示回落到数据形态）
+- **`level_orders` 随消息落盘**：回放复现**当时**的层级序与树 —— 此前用「此刻」的语义层，
+  层级序一改历史树就静默改观（审核实证同一消息两种画法会多出一条边）
+- 瀑布图补走 `themed()`：搬运时保持原样，导致它是同页**唯一**没统一字体/网格/轴色的图
+- `.tmp` 名改为唯一 + 失败时清理：原名写死，两个浏览器标签页并发写会交叠损坏共享文件
+  （审核已构造复现），且失败会留下含聊天记录明文的残骸
+- `plan_tasks` 的 `limit=0` 负零切片陷阱（`items[-0:]` 会整批放行）
+
+未修、记录在案的两条见 §4。
+
+**未做**：多指标查询（散点图 / 双轴组合图的前提）—— 属独立决策，本期明确不做。
+
+**改这块代码前必读**：
+
+- `app/` 内模块的导入已统一为**平铺名**（`from chart_data import ...`），`app/` 的测试靠
+  `sys.path.insert(APP_DIR)`（与 `tests/test_import_wizard.py` 同模式）
+- `attribution_viz.py` 对新模块用**函数内延迟 import** —— 模块级 import 会与 `chart_attr` 成环
+- 配色与 mark 级样式走 `chart_theme.themed()` 的 `configure_*` 层，**不要**写进 `mark_bar(...)`：
+  有测试精确断言 `spec["mark"] == {"type": "bar"}`
+
+---
+
 ## 4. 已知问题（不阻塞，但别忘）
 
 | 问题 | 影响 |
@@ -197,6 +252,9 @@ python scripts/check_semantic.py --dataset ecommerce-demo   # 期望：语义层
 | **`datasets/ecommerce-demo/semantic.yaml` 缺 `caveats` 节点** | 提示词里的「口径陷阱」段永远为空。渲染路径有测试覆盖，**加上节点即自动生效** |
 | `scripts/check_semantic.py` 的**影响分析只做了一半** | ✅ 已修(2026-09-14):破坏性变更时列出受影响 case(`datasets/<id>/cases/*.yaml` 的 stem)与 annotations.jsonl 是否存在;语义层不在数据集包布局里时降级为提示 |
 | `attribution/decompose.py` / `engine_decompose.py` / `semantic_schema.py` **恰好 300 行** | 零余量，下一个改动即破线（M3-a 已把 semantic 系列从超限压回线内，别再往上加） |
+| **`CHART_LIMIT` 是每条消息的上限，不是页面总量**（审核 2026-09-20） | 会话内消息数无上限（`MAX_SESSIONS=30` 只限会话数）。极端情形：40 条 assistant 消息 × 上限 24 = 每轮 rerun 最多 960 张图；`_save_history` 每次追加都全量重序列化（实测 40 条 ≈ 2.5 MB / 17 ms，当前量级可接受，但**没有防护栏**） |
+| **结构性 `total_*` 与 `query_metric` 同页并置**（审核 2026-09-20） | 新增的查询图让两类**不可比**的总量会同页出现。各自独立成图，没破「不得画进同一张瀑布图 / 同一条叙事线」的红线，但读者更容易并排比较 —— 低严重度，仅提示 |
+| **行数要用 `ReadAllLines` 量**（2026-09-20 实测） | `Get-Content $f \| Measure-Object -Line` 读无 BOM 的中文文件会**系统性少算 20–45 行**（实测 `attribution_viz.py` 303 vs 282、`app.py` 253 vs 214、`tool_catalog.py` 158 vs 122）。按少算的值估余量会误判 —— 本文件上面那条「303 行」的记录其实是**对的**，是测量方法错 |
 | 整数维度的返回值类型变过 | `query_metric('gmv',['year'],…)` 从 `2026.0` 变成 `2026`（新代码保持列原始类型，**属有意改进但未正式记录**） |
 | **单侧切片用例依赖开店日期分布** | `tests/test_engine_decompose.py` 的单侧切片用例依赖 2024-09 开店分布；重新造数若改开店策略会因数据变红 |
 | **δ 近似路径不满足零残差**（审核证伪） | 因子含非正值时 Σeffect ≠ total_change（近似,label 有标注）。已写入契约 v2 警告;不要宣称「任何情况下零残差」 |

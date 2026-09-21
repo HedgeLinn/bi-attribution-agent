@@ -226,7 +226,9 @@ def _run_tool_calls(resp: AIMessage, runnable: dict, messages: list, step: int,
 # ---------------------------------------------------------------------------
 # 结论沉淀(§6.3 的写半侧):把最终 JSON 结论转成一条 annotation 追加进数据集目录
 # ---------------------------------------------------------------------------
-_EXCLUDED_FROM_CONFIRMED = ("已排除", "证据链")
+# 「图表」只是给前端挑默认图型的提示,不是结论内容 —— 留在 confirmed 里会挤占
+# 回注提示词的 240 字符预算(annotations 会按相关性把 confirmed 摘要注回上下文)
+_EXCLUDED_FROM_CONFIRMED = ("已排除", "证据链", "图表")
 
 
 def _to_annotation(query: str, content: str, ts: str) -> Annotation | None:

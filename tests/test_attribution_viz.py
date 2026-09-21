@@ -7,15 +7,25 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from app.attribution_viz import (_slice_label, _waterfall_rows, build_tree,
-                                 extract_drilldown, render_from_events, render_tree,
-                                 render_waterfall, waterfall_from_contribute,
-                                 waterfall_from_decompose)
-from tests.engine_fixtures import BASE_WINDOW, CMP_WINDOW, real_engine
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+APP_DIR = PROJECT_ROOT / "app"
+# app/ 内模块之间用平铺名互相引用(streamlit 运行时就是这个路径);这里的 insert 让
+# pytest 也能按同样方式导入 —— 与 tests/test_import_wizard.py 一致的模式。
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
+from attribution_viz import (build_tree, extract_drilldown,               # noqa: E402
+                             render_from_events, render_tree)
+from chart_attr import render_waterfall                                   # noqa: E402
+from chart_data import (slice_label, waterfall_from_contribute,           # noqa: E402
+                        waterfall_from_decompose, waterfall_rows)
+from tests.viz_fixtures import Stub, call, cont, events, real  # noqa: E402,F401
 
 _TRUNC = "其余切片(已省略 2 条之外的切片)"     # 括号里是**已进图**的条数(省略几条不可知)
 _NO_SLICE, _UNREADABLE = "无切片明细(仅总量)", "结果不可读"
@@ -25,57 +35,13 @@ def _exact(value):                                  # 金额量级下 rel 太松
     return pytest.approx(value, abs=1e-6, rel=0)
 
 
-def _call(step, name, args, result) -> list[dict]:
-    """一步工具调用 -> 两条事件(tool_call + tool_result),与 harness/loop.py 同构。"""
-    return [{"type": "tool_call", "step": step, "name": name, "args": args},
-            {"type": "tool_result", "step": step, "name": name, "result": result}]
-
-
-def _cont(step, metric, level, result, **extra) -> list[dict]:
-    """一步 contribute 事件(dimension 固定 store;extra 可带 filters)。"""
-    return _call(step, "contribute",
-                 {"metric": metric, "dimension": "store", "level": level, **extra}, result)
-
-
-class _Stub:
-    """st 容器替身:渲染调用记成 (方法名, *args, **kwargs);调用清单本身即断言对象。"""
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
-    def __getattr__(self, name: str):
-        return lambda *args, **kwargs: self.calls.append((name, *args, kwargs))
-
-
-@pytest.fixture(scope="module")
-def real() -> dict:
-    """真实结果(引擎只跑一遍);error 由引擎**真抛**的异常取来 —— 失败的真实形态。"""
-    engine = real_engine()
-    window = (*BASE_WINDOW, *CMP_WINDOW)           # contribute 的点位参数顺序:基期、对比期
-    out = {"anomaly": engine.detect_anomaly("gmv", *CMP_WINDOW, *BASE_WINDOW),
-           "region": engine.contribute("gmv", "store", "region", *window),
-           "city": engine.contribute("gmv", "store", "city", *window),
-           "store": engine.contribute("gmv", "store", "store_id", *window),
-           "decompose": engine.decompose("gmv", ["aov", "orders_count"], *window)}
-    with pytest.raises(ValueError) as raised:
-        engine.contribute("gmv", "store", "store_name", *window)
-    out["error"] = {"error": str(raised.value)}
-    return out
-
-
-@pytest.fixture(scope="module")
-def events(real) -> list[dict]:
-    """真实归因事件流:检测 -> 区域贡献 -> 下钻到城市(filters 命中切片)-> 因子分解。"""
-    return [*_call(0, "detect_anomaly", {"metric": "gmv"}, real["anomaly"]),
-            *_cont(1, "gmv", "region", real["region"]),
-            *_cont(2, "gmv", "city", real["city"],
-                   filters={"region": real["region"]["top"][0]["key"]}),
-            *_call(3, "decompose", {"target": "gmv"}, real["decompose"])]
 
 
 def test_extract_drilldown_orders_pairs_and_degrades() -> None:
     """按 step 升序取出结果、args 与调用配对、字符串原样保留;脏输入不抛错。"""
-    items = extract_drilldown([*_call(2, "unknown_tool", {"x": 1}, "工具报错了"),
-                              *_call(0, "detect_anomaly", {"metric": "m"}, {"is_anomaly": True}),
-                              *_call(1, "contribute", {"dimension": "d", "level": "l"},
+    items = extract_drilldown([*call(2, "unknown_tool", {"x": 1}, "工具报错了"),
+                              *call(0, "detect_anomaly", {"metric": "m"}, {"is_anomaly": True}),
+                              *call(1, "contribute", {"dimension": "d", "level": "l"},
                                      {"top": []})])
     assert [it["step"] for it in items] == [0, 1, 2]
     assert [it["tool"] for it in items] == ["detect_anomaly", "contribute", "unknown_tool"]
@@ -84,9 +50,9 @@ def test_extract_drilldown_orders_pairs_and_degrades() -> None:
     assert extract_drilldown([None, "x", {"type": "final"}]) == [] == extract_drilldown(None)
     assert extract_drilldown([{"type": "tool_result", "step": 0, "name": "contribute"}]) == [
         {"step": 0, "tool": "contribute", "args": {}, "result": None}]
-    again = extract_drilldown(_call(0, "c", {"a": 1}, "r1") + _call(0, "c", {"a": 2}, "r2"))
+    again = extract_drilldown(call(0, "c", {"a": 1}, "r1") + call(0, "c", {"a": 2}, "r2"))
     assert [it["args"] for it in again] == [{"a": 1}, {"a": 2}]     # 同一步的多次调用按序配对
-    mixed = extract_drilldown(_call("x", "c", {}, "s") + _call(0, "c", {}, "n"))
+    mixed = extract_drilldown(call("x", "c", {}, "s") + call(0, "c", {}, "n"))
     assert [it["step"] for it in mixed] == [0, "x"]                 # 非整数 step 排末尾
 
 
@@ -95,10 +61,10 @@ def test_build_tree_draws_root_dimension_slices_and_drill_chain(real) -> None:
     切片,否则挂上一个维度节点(默认只按「level 名称不同」弱判定,见下条)。"""
     region, city, hit = real["region"], real["city"], real["region"]["top"][0]["key"]
     tree = build_tree(extract_drilldown(
-        _call(0, "detect_anomaly", {"metric": "gmv"}, real["anomaly"])
-        + _cont(1, "gmv", "region", region)
-        + _cont(2, "gmv", "city", city, filters={"region": hit})
-        + _cont(3, "gmv", "store_id", real["store"])))
+        call(0, "detect_anomaly", {"metric": "gmv"}, real["anomaly"])
+        + cont(1, "gmv", "region", region)
+        + cont(2, "gmv", "city", city, filters={"region": hit})
+        + cont(3, "gmv", "store_id", real["store"])))
     nodes, edges, first = tree["nodes"], tree["edges"], 2 + len(region["top"])
     second = first + 1 + len(city["top"])          # 第二次下钻的维度节点
     assert nodes[0]["tool"] == "detect_anomaly" and (0, 1) in edges
@@ -117,24 +83,24 @@ def test_build_tree_chain_metric_rules_and_parallel_anomalies(real) -> None:
     orders = {"store": ("region", "city", "store_id")}
     res = {"metric": "m", "total_base": 10.0, "total_cmp": 8.0, "total_change": -2.0,
            "top": [{"key": "s1", "base": 5.0, "change": -1.0}]}
-    rollback = extract_drilldown(_cont(1, "m", "region", res) + _cont(2, "m", "city", res)
-                                 + _cont(3, "m", "region", res))
+    rollback = extract_drilldown(cont(1, "m", "region", res) + cont(2, "m", "city", res)
+                                 + cont(3, "m", "region", res))
     deep = build_tree(rollback, orders)
     assert (0, 2) in deep["edges"]                             # region -> city:index 0 -> 1
     assert not any(child == 4 for _, child in deep["edges"])    # 回退(region)不成链 -> 挂根
     assert (2, 4) in build_tree(rollback)["edges"]              # 不传 level_orders:认不出回退
-    cross = extract_drilldown(_cont(1, "m", "city", res) + _cont(2, "n", "region", res))
+    cross = extract_drilldown(cont(1, "m", "city", res) + cont(2, "n", "region", res))
     assert not any(c == 2 for _, c in build_tree(cross, orders)["edges"])  # 换指标 != 同一条链
-    skipped = extract_drilldown(_cont(1, "m", "region", res) + _cont(2, "m", "store_id", res))
+    skipped = extract_drilldown(cont(1, "m", "region", res) + cont(2, "m", "store_id", res))
     assert (0, 2) in build_tree(skipped, orders)["edges"]        # 隔层下钻也算加深:0 -> 2
     assert not any(c == 2 for _, c in build_tree(                # 层级不在序里 -> index -1
         skipped, {"store": ("region", "city")})["edges"])
     items = extract_drilldown(                                   # F4:第二次检测另起一棵树
-        _call(0, "detect_anomaly", {"metric": "gmv"}, real["anomaly"])
-        + _cont(1, "gmv", "region", real["region"])
-        + _call(2, "detect_anomaly", {"metric": "aov"},
+        call(0, "detect_anomaly", {"metric": "gmv"}, real["anomaly"])
+        + cont(1, "gmv", "region", real["region"])
+        + call(2, "detect_anomaly", {"metric": "aov"},
                 {"metric": "aov", "is_anomaly": True, "change_rate": -0.1})
-        + _cont(3, "aov", "region", real["region"]))
+        + cont(3, "aov", "region", real["region"]))
     edges, second = build_tree(items)["edges"], 2 + len(real["region"]["top"])
     assert (0, 1) in edges and (second, second + 1) in edges      # 各自的贡献挂各自的根
     assert not any(child == second for _, child in edges)         # 第二个异常不嵌在第一个下
@@ -145,11 +111,11 @@ def test_build_tree_evidence_and_degradation(real) -> None:
     """query_metric 挂最后一个维度节点;报错(字符串形态)照画但标 ⚠️;空输入给空树。"""
     region = real["region"]
     items = extract_drilldown(
-        _call(0, "detect_anomaly", {"metric": "gmv"}, real["anomaly"])
-        + _cont(1, "gmv", "region", region)
-        + _call(2, "query_metric", {"metric": "gmv", "dims": ["region"]}, {"rows": [1]})
-        + _call(3, "contribute", {"dimension": "store", "level": "region"}, "工具报错了")
-        + _call(4, "who_knows", {}, {"whatever": 1}))
+        call(0, "detect_anomaly", {"metric": "gmv"}, real["anomaly"])
+        + cont(1, "gmv", "region", region)
+        + call(2, "query_metric", {"metric": "gmv", "dims": ["region"]}, {"rows": [1]})
+        + call(3, "contribute", {"dimension": "store", "level": "region"}, "工具报错了")
+        + call(4, "who_knows", {}, {"whatever": 1}))
     nodes, edges = build_tree(items)["nodes"], build_tree(items)["edges"]
     q, err = 2 + len(region["top"]), 3 + len(region["top"])
     assert nodes[q]["label"].startswith("查询") and (1, q) in edges      # 证据挂维度节点
@@ -185,10 +151,10 @@ def test_waterfall_from_contribute_identity_labels_and_degrades(real) -> None:
         assert bars[-2]["label"] == label            # 残差条在末条之前:三种说法各不同
         assert sum(bar["delta"] for bar in bars) == _exact(-2.0)
     nan, inf = float("nan"), float("inf")
-    assert _slice_label({"key": "x", "change": nan}) == "x"   # F6:数值非有限就只留切片名
-    assert _slice_label({"key": "x", "change": inf, "change_rate": -0.5}) == "x -50.0%"
-    assert _slice_label({"key": "x", "change_rate": nan}) == "x"
-    assert _slice_label({"key": "x", "change": -3.0}) == "x -3" and _slice_label({}) == "?"
+    assert slice_label({"key": "x", "change": nan}) == "x"   # F6:数值非有限就只留切片名
+    assert slice_label({"key": "x", "change": inf, "change_rate": -0.5}) == "x -50.0%"
+    assert slice_label({"key": "x", "change_rate": nan}) == "x"
+    assert slice_label({"key": "x", "change": -3.0}) == "x -3" and slice_label({}) == "?"
 
 
 def test_waterfall_from_decompose_transports_effects_as_is(real) -> None:
@@ -215,7 +181,7 @@ def test_waterfall_from_decompose_transports_effects_as_is(real) -> None:
 def test_render_skips_empty_and_emits_explicit_interval_chart(real) -> None:
     """空树 / 空 bars 不渲染;有数据时交出合法 DOT(转义、丢弃畸形边)与 altair 图;
     F7 的区间(y0/y1)在 Python 里算好、跌破 0 也对:图上不许再交给 Vega 的 stack。"""
-    stub = _Stub()
+    stub = Stub()
     for empty in ({"nodes": [], "edges": []}, {}, None):   # 空树不画
         render_tree(stub, empty)
     for empty in ({}, None):                               # 空 bars 不画
@@ -232,7 +198,7 @@ def test_render_skips_empty_and_emits_explicit_interval_chart(real) -> None:
             {"label": "a", "base": 40.0, "delta": -60.0},
             {"label": "b", "base": 30.0, "delta": -50.0},
             {"label": "m 对比期", "base": -10.0, "delta": 0.0}]
-    assert [(r["y0"], r["y1"], r["kind"]) for r in _waterfall_rows(bars)] == [
+    assert [(r["y0"], r["y1"], r["kind"]) for r in waterfall_rows(bars)] == [
         (0.0, 100.0, "flat"), (40.0, 100.0, "down"), (-10.0, 40.0, "down"), (-10.0, 0.0, "flat")]
     render_waterfall(stub, bars, title="T")
     _, chart, kwargs = stub.calls[1]
@@ -248,39 +214,42 @@ def test_render_from_events_dispatches_error_ratio_and_charts(real, events) -> N
     """总入口:F1 工具失败(dict)标 ⚠️ + 一行说明、原样带出错误文本、绝不说成「比率型」;
     可加结果 -> 一张树 + 每个结果一张瀑布图;比率型 -> 只说明;空流 -> 什么都不画。"""
     error, msg = real["error"], real["error"]["error"]
-    error_events = (_call(0, "detect_anomaly", {"metric": "gmv"}, real["anomaly"])
-                    + _cont(1, "gmv", "store_name", error))
+    error_events = (call(0, "detect_anomaly", {"metric": "gmv"}, real["anomaly"])
+                    + cont(1, "gmv", "store_name", error))
     node = build_tree(extract_drilldown(error_events))["nodes"][1]
     assert node["label"].endswith("⚠️") and "工具报错" in node["detail"] and msg in node["detail"]
-    stub = _Stub()
+    stub = Stub()
     render_from_events(stub, error_events)
-    assert [c[0] for c in stub.calls] == ["graphviz_chart", "caption"]   # 报错不画图
-    assert "工具报错" in stub.calls[1][1] and msg in stub.calls[1][1]
-    assert "比率型" not in stub.calls[1][1]   # 失败不是口径问题:不替它编解释
-    both, mixed = {**error, "total_base": 1.0, "total_cmp": 1.0, "change_rate": -0.2}, _Stub()
-    render_from_events(mixed, _cont(0, "gmv", "store_name", both))
+    # 树 -> 基线对比图(那一步 detect_anomaly 是好的)-> 报错的 contribute 只给说明不画图
+    assert [c[0] for c in stub.calls] == ["graphviz_chart", "altair_chart", "caption"]
+    assert "工具报错" in stub.calls[2][1] and msg in stub.calls[2][1]
+    assert "比率型" not in stub.calls[2][1]   # 失败不是口径问题:不替它编解释
+    both, mixed = {**error, "total_base": 1.0, "total_cmp": 1.0, "change_rate": -0.2}, Stub()
+    render_from_events(mixed, cont(0, "gmv", "store_name", both))
     assert [c[0] for c in mixed.calls] == ["graphviz_chart", "caption"]  # 有总量也不许画
     assert "工具报错" in mixed.calls[1][1] and "比率型" not in mixed.calls[1][1]
-    ok = _Stub()
+    ok = Stub()
     render_from_events(ok, events)
     kinds = [c[0] for c in ok.calls]
     assert kinds.count("graphviz_chart") == 1 and kinds[0] == "graphviz_chart"
-    assert kinds.count("altair_chart") == 3   # 区域贡献 + 城市贡献 + 整窗分解
-    ratio = _Stub()
-    render_from_events(ratio, _call(0, "contribute", {"metric": "aov"},
+    # 基线对比(anomaly)+ 区域贡献 + 城市贡献 + 整窗分解
+    assert kinds.count("altair_chart") == 4
+    ratio = Stub()
+    render_from_events(ratio, call(0, "contribute", {"metric": "aov"},
                                     {"metric": "aov", "total_base": 5.0, "total_cmp": 4.0,
                                      "change_rate": -0.2, "top": [{"key": "a",
                                                                    "change_rate": -0.2}]}))
-    assert [c[0] for c in ratio.calls] == ["graphviz_chart", "caption"]
-    assert "不可加" in ratio.calls[1][1]      # 比率型只说明,不硬画
-    empty = _Stub()
+    # 比率型:不再「只说明」—— 说明之后画变化率条形图(它有的就是逐切片变化率)
+    assert [c[0] for c in ratio.calls] == ["graphviz_chart", "caption", "altair_chart"]
+    assert "不可加" in ratio.calls[1][1]
+    empty = Stub()
     assert render_from_events(empty, []) is None and empty.calls == []
 
 
 def test_render_from_events_hints_on_unknown_result_shape() -> None:
     """结果既不是报错、也没有可画数据、又判不出比率型 -> 如实说「形态无法识别」,不硬画。"""
-    stub = _Stub()
-    render_from_events(stub, _call(0, "decompose", {"target": "t"},
+    stub = Stub()
+    render_from_events(stub, call(0, "decompose", {"target": "t"},
                                    {"target": "t", "total_base": 1.0, "total_cmp": 2.0,
                                     "effects": []}))
     assert [c[0] for c in stub.calls] == ["graphviz_chart", "caption"]
@@ -291,7 +260,7 @@ def _viz_app(events) -> None:
     """AppTest 宿主:源码被原样当脚本执行 —— imports 必须在函数体内,数据经 kwargs 传入。"""
     import streamlit as st
 
-    from app.attribution_viz import render_from_events
+    from attribution_viz import render_from_events
 
     render_from_events(st, events)
 
@@ -303,7 +272,12 @@ def test_apptest_renders_tree_and_waterfall(events) -> None:
     graphs = at.get("graphviz_chart")
     assert len(graphs) == 1 and "digraph" in str(graphs[0].spec)
     charts = [*at.get("vega_lite_chart"), *at.get("arrow_vega_lite_chart")]
-    assert len(charts) == 3 and json.loads(charts[0].spec)["mark"]["type"] == "bar"
+    assert len(charts) == 4
+    specs = [json.loads(c.spec) for c in charts]
+    # 首张是基线对比图:分层(柱 + 基线±MAD 的离散带),所以顶层没有 mark;
+    # 其余三张是瀑布图,mark 干净地形如 {"type": "bar"}。
+    assert specs[0]["layer"][0]["mark"]["type"] == "bar" and len(specs[0]["layer"]) == 2
+    assert all(s["mark"]["type"] == "bar" for s in specs[1:])
 
     blank = AppTest.from_function(_viz_app, default_timeout=30, kwargs={"events": []}).run()
     assert not blank.exception, [element.value for element in blank.exception]

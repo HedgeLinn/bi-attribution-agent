@@ -19,6 +19,7 @@
 """
 import os
 import sys
+import uuid
 
 import streamlit as st
 
@@ -47,19 +48,22 @@ from dataset_selector import (  # noqa: E402
     visible_sessions,
 )
 from attribution_viz import render_from_events  # noqa: E402
+from chart_plan import expand_state_key  # noqa: E402
 from import_wizard import render_wizard_area  # noqa: E402
 from importer_ui import render_importer  # noqa: E402
 
 # 展示辅助 / 聊天历史 / 全局样式 / 结论解析,均从 app.py 拆出以压行数;入口只做接线。
 from format import _fmt_args, _summarize_result  # noqa: E402
-from conclusion import parse_final, render_assistant_msg, render_conclusion  # noqa: E402
+from conclusion import parse_final, render_conclusion, render_token_caption  # noqa: E402
 from history import (  # noqa: E402
     _append,
+    _configure_history,
     _current_session,
     _init_state,
     _new_session,
     _save_history,
-    _configure_history,
+    decode_events,
+    encode_events,
 )
 from theme import _GLOBAL_CSS  # noqa: E402
 
@@ -178,14 +182,26 @@ def main():
     if render_wizard_area():
         st.stop()
 
-    # 当前会话消息回放
+    # 当前会话消息回放:图表从消息里存的**事件流**重建 —— 与当轮走同一段渲染代码,
+    # 所以将来再加图型,历史问答也会跟着升级。顺序与当轮保持一致(结论 → 图 → token)。
     sess = _current_session()
-    for msg in sess["messages"]:
+    for index, msg in enumerate(sess["messages"]):
         with st.chat_message(msg["role"]):
             if msg["role"] == "user":
                 st.markdown(msg["content"])
             else:
-                render_assistant_msg(msg)
+                scope = msg.get("id") or f"{sess['id']}_{index}"   # 老消息没有 id
+                parsed = msg.get("parsed")
+                render_conclusion(parsed, msg.get("content"))
+                # 层级序与图型提示都用**消息里存下来的**:回放要复现当时的画法。
+                # 拿「此刻」的语义层会让层级序一改、历史树就静默改观(老消息没存则退回当前值)。
+                render_from_events(st, decode_events(msg),
+                                   msg.get("level_orders") or _level_orders(), scope=scope,
+                                   expanded=st.session_state.get(
+                                       expand_state_key(scope), False),
+                                   chart_hint=parsed.get("图表")
+                                   if isinstance(parsed, dict) else None)
+                render_token_caption(msg)
 
     if not sess["messages"]:
         st.caption("💬 在下方输入你的问题,agent 会先做异常检测、再逐层下钻、最后给出根因结论。")
@@ -205,6 +221,7 @@ def main():
 
     events = []
     usage_info = {}
+    msg_id = uuid.uuid4().hex      # 消息 id:切换器的控件 key 拿它做命名空间(回放时唯一)
     with st.chat_message("assistant"):
         with st.status("🔍 正在归因分析…", expanded=True) as status:
             log_ph = st.empty()
@@ -231,9 +248,13 @@ def main():
 
         parsed, raw = parse_final(final) if final is not None else (None, "")
         render_conclusion(parsed, raw)
-        # 下钻过程可视化(§4.6):事件流 -> 归因树 + 瀑布图(实现独立成模块,这里只挂接);
-        # level_orders 传语义层的层级序,「层级加深」判定走严格版(模块内弱判定只是兜底)
-        render_from_events(st, events, _level_orders())
+        # 下钻过程可视化(§4.6):事件流 -> 归因树 + 各步结果的图(独立成模块,这里只挂接);
+        # level_orders 传语义层的层级序(「层级加深」判定走严格版);scope 用消息 id 保证
+        # 切换器控件 key 全局唯一;chart_hint 是模型在结论里给的默认图型(可缺省)
+        level_orders = _level_orders()     # 与 events 一起存进消息:回放时复现当时的画法
+        render_from_events(st, events, level_orders, scope=msg_id,
+                           expanded=st.session_state.get(expand_state_key(msg_id), False),
+                           chart_hint=parsed.get("图表") if isinstance(parsed, dict) else None)
         if usage_info:
             st.caption(
                 f"⚡ 本轮 token 消耗:输入 **{usage_info.get('input_tokens', 0):,}** "
@@ -243,7 +264,10 @@ def main():
 
         # 写入历史(先 user 后 assistant,保持顺序)
         _append("user", {"content": prompt})
-        _append("assistant", {"content": raw, "parsed": parsed,
+        # events 随消息落盘(= 图表能随聊天记录留存的原因);存紧凑串,见 history.encode_events
+        _append("assistant", {"content": raw, "parsed": parsed, "id": msg_id,
+                              "events": encode_events(events),
+                              "level_orders": level_orders,
                               "input_tokens": usage_info.get("input_tokens"),
                               "output_tokens": usage_info.get("output_tokens"),
                               "cost_cny": usage_info.get("cost_cny")})

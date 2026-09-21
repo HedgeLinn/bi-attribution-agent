@@ -10,11 +10,13 @@
 """
 
 import json
+import os
 import uuid
 from datetime import datetime
 
 import streamlit as st
 
+from chart_data import keep_events       # 事件裁剪(纯数据层,不依赖 streamlit)
 from dataset_selector import (  # noqa: E402
     current_dataset_id,
     migrate_legacy_sessions,
@@ -62,13 +64,63 @@ def _load_history():
     return []
 
 
-def _save_history():
-    """把会话列表写回本地文件。"""
+def encode_events(events):
+    """事件流 -> **紧凑 JSON 字符串**(消息 payload 里就存这个)。
+
+    存成字符串而不是 list,是因为落盘用的是 `indent=2`:嵌套的事件流被展开后体积会翻几倍。
+    序列化失败返回 `"[]"` —— 画不出图是可以接受的降级,**存不下去才是灾难**。
+    """
     try:
-        with open(HISTORY_PATH, "w", encoding="utf-8") as fh:
-            json.dump(st.session_state[HISTORY_KEY], fh, ensure_ascii=False, indent=2)
+        return json.dumps(keep_events(events), ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return "[]"
+
+
+def decode_events(msg):
+    """消息里的 `events` -> 列表。
+
+    兼容三种形态:紧凑字符串(现格式)/ 直接存的 list / 老消息根本没有这个键。
+    任何解析失败都退化成空列表 —— 回放画不出图,但不许把回放本身弄崩。
+    """
+    raw = msg.get("events")
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _save_history():
+    """把会话列表**原子**写回本地文件。
+
+    两个防线(旧实现两条都没有):
+
+    1. **先序列化到内存再落盘**。旧写法是 `open("w")` 先截断再 `json.dump`,而 `json.dump`
+       中途抛 `TypeError`(事件里混进不可序列化对象)时,磁盘上**整份聊天历史已被清空**。
+    2. **写盘失败不冒泡**。聊天记录是锦上添花,不许拖垮主流程。
+    """
+    try:
+        payload = json.dumps(st.session_state[HISTORY_KEY], ensure_ascii=False, indent=2)
+    except (TypeError, ValueError) as e:
+        st.warning(f"聊天记录保存失败(内容无法序列化),本次未写入:{e}")
+        return
+    # 临时名必须唯一:chat_history.json 是所有浏览器会话共享的一个文件,写死的 `.tmp`
+    # 会让并发写交叠进同一份文件(两个标签页就能触发)。
+    tmp = f"{HISTORY_PATH}.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp, HISTORY_PATH)       # 原子替换:读到的一半文件不存在
     except OSError as e:
         st.warning(f"聊天记录保存失败:{e}")
+        try:
+            os.unlink(tmp)                  # 别留下含聊天记录明文的残骸
+        except OSError:
+            pass
 
 
 def _new_session(title=""):
