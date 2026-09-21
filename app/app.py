@@ -51,6 +51,7 @@ from attribution_viz import render_from_events  # noqa: E402
 from chart_plan import expand_state_key  # noqa: E402
 from import_wizard import render_wizard_area  # noqa: E402
 from importer_ui import render_importer  # noqa: E402
+from session_context import build_context_hint  # noqa: E402
 
 # 展示辅助 / 聊天历史 / 全局样式 / 结论解析,均从 app.py 拆出以压行数;入口只做接线。
 from format import _fmt_args, _summarize_result  # noqa: E402
@@ -239,7 +240,11 @@ def main():
                 _render_events_into(log_ph, events)
 
             try:
-                final = run(prompt, verbose=False, on_event=on_event)
+                # M9: 会话内多轮记忆 — 从上轮 events 提取摘要注入提示词,
+                # 让模型知道"刚才分析到哪了",追问时不重复劳动。
+                context_hint = build_context_hint(sess["messages"])
+                final = run(prompt, verbose=False, on_event=on_event,
+                            context_hint=context_hint)
                 status.update(label="✅ 归因分析完成", state="complete", expanded=True)
             except Exception as e:
                 status.update(label="⚠️ 分析出错", state="error")

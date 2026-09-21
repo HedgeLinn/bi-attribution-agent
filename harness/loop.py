@@ -64,7 +64,8 @@ def _extract_usage(msg: AIMessage) -> tuple[int, int]:
     return 0, 0
 
 
-def run(query: str, verbose: bool = True, on_event=None, persist: bool = True) -> str:
+def run(query: str, verbose: bool = True, on_event=None, persist: bool = True,
+        context_hint: str | None = None) -> str:
     """跑一轮完整的归因分析。query 是用户的问题,返回模型最终的分析结论。
 
     on_event: 可选回调,签名 on_event(event: dict)。事件类型:
@@ -75,12 +76,16 @@ def run(query: str, verbose: bool = True, on_event=None, persist: bool = True) -
     供前端实时展示「假设-验证」过程用;传 None 则只靠 verbose print。
     persist: 结束时把结构化结论沉淀到 annotations.jsonl(§6.3);评估等测量场景
     传 False,别让批量跑分把 repo 内的沉淀文件写成自己的答案。
+    context_hint: 会话内上轮分析的结构化摘要(M9),注入系统提示词末尾;
+    评估等测量场景不传 = 原行为。
     """
     # 每次运行都按当前语义层重建:工具 schema 与系统提示词都跟着语义层走
     tool_objects = tools.build_tools()
     runnable = {tool.name: tool for tool in tool_objects}
     llm = build_llm(tools=tool_objects)
-    system_prompt = context.render_system_prompt(tools.semantic(), tools.dataset_context(), query)
+    system_prompt = context.render_system_prompt(
+        tools.semantic(), tools.dataset_context(), query,
+        context_hint=context_hint)
     messages = [SystemMessage(content=system_prompt), HumanMessage(content=query)]
 
     in_tokens = out_tokens = 0

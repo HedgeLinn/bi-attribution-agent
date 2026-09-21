@@ -62,6 +62,8 @@ _METHODOLOGY = """你是一个归因分析师,通过「指标变化 → 维度�
   才能确认真正的异常点。
 - 命中促销日历的回落属于预期脉冲,不是异常,不要当成业务问题上报。
 - 时间参数一律用 YYYY-MM-DD 格式。
+- 如果系统提示词末尾有「上轮分析」段,那是你刚才对同一用户的分析记录。
+  追问可能是对它的细化、转向或纠正。从它停下的位置继续,不要重复已完成的步骤。
 
 ## 区分「业务问题」与「数据问题」
 - 业务问题:数据本身完整,变化由真实业务动作导致(某个切片确实异常)。
@@ -137,14 +139,21 @@ class DatasetContext:
 
 
 def render_system_prompt(semantic: Semantic, dataset_context: DatasetContext | None = None,
-                         query: str | None = None) -> str:
+                         query: str | None = None,
+                         context_hint: str | None = None) -> str:
     """渲染系统提示词 = 数据集无关的方法论(常量) + 数据集上下文(由语义层渲染)。
 
     签名演进(M6,§6.3):新增可选参数 query。不给时输出与加这个参数之前**逐字相同**。
+    M9 新增 context_hint:会话内上轮分析的结构化摘要,注入在最末尾(模型注意力最强处)。
+    评估场景不传 = 原行为。
     """
     prompt = f"{_METHODOLOGY}\n{render_dataset_context(semantic, dataset_context)}"
     history = _annotations_block(semantic, query)
-    return f"{prompt}\n\n{history}" if history else prompt
+    if history:
+        prompt = f"{prompt}\n\n{history}"
+    if context_hint:
+        prompt = f"{prompt}\n\n{context_hint}"
+    return prompt
 
 
 def render_dataset_context(semantic: Semantic, dataset_context: DatasetContext | None = None) -> str:
